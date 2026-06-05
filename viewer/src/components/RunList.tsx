@@ -30,11 +30,11 @@ export function RunList() {
               )
             }
           >
-            <div className="flex items-center gap-2">
-              <StatusGlyph state={r.status} className="text-xs" />
+            <div className="flex items-center gap-1.5">
+              <StatusGlyph state={r.status} />
               <span className="truncate text-sm font-medium">{r.name ?? r.runId}</span>
             </div>
-            <div className="pl-[1.375rem] font-mono text-[11px] text-subtle-foreground">
+            <div className="font-mono text-[11px] text-subtle-foreground">
               {r.agents} {r.agents === 1 ? "agent" : "agents"} · {timeAgo(r.startedAt) || "—"}
             </div>
           </NavLink>

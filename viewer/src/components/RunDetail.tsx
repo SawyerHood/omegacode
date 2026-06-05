@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react"
 import { useNavigate, useParams } from "react-router-dom"
 
-import { ProviderDot, StatusGlyph } from "@/components/glyphs"
+import { ProviderIcon, StatusGlyph } from "@/components/glyphs"
 import { fmtClock, fmtCost, fmtDuration, fmtTokens } from "@/lib/format"
 import { type AgentSnapshot, type AgentState, isTerminalAgent, type PhaseSnapshot, type RunSnapshot } from "@/lib/types"
 import { cn } from "@/lib/utils"
@@ -24,7 +24,7 @@ function rollup(agents: AgentSnapshot[]): AgentState {
   return "queued"
 }
 
-function AgentRow({ agent, last, active, onClick }: { agent: AgentSnapshot; last: boolean; active: boolean; onClick: () => void }) {
+function AgentRow({ agent, active, onClick }: { agent: AgentSnapshot; active: boolean; onClick: () => void }) {
   const meta = [
     agent.model,
     agent.outputTokens ? `${fmtTokens((agent.inputTokens ?? 0) + agent.outputTokens)} tok` : null,
@@ -41,9 +41,8 @@ function AgentRow({ agent, last, active, onClick }: { agent: AgentSnapshot; last
         active && "bg-surface-selected",
       )}
     >
-      <span className="mt-0.5 font-mono text-xs text-border select-none">{last ? "└─" : "├─"}</span>
-      <StatusGlyph state={agent.state} className="mt-0.5 text-xs" />
-      <ProviderDot provider={agent.provider} className="mt-[7px]" />
+      <StatusGlyph state={agent.state} className="mt-0.5 size-3.5" />
+      <ProviderIcon provider={agent.provider} className="mt-0.5" />
       <span className="min-w-0 flex-1">
         <span className="flex items-baseline gap-1.5">
           <span className="truncate text-sm">{agent.label || `agent ${agent.index}`}</span>
@@ -79,14 +78,8 @@ function PhaseGroup({
         </span>
       </div>
       <div className="flex flex-col gap-0.5 p-1.5">
-        {phase.agents.map((a, i) => (
-          <AgentRow
-            key={a.index}
-            agent={a}
-            last={i === phase.agents.length - 1}
-            active={a.index === activeIndex}
-            onClick={() => onPick(a.index)}
-          />
+        {phase.agents.map((a) => (
+          <AgentRow key={a.index} agent={a} active={a.index === activeIndex} onClick={() => onPick(a.index)} />
         ))}
       </div>
     </div>
@@ -149,8 +142,8 @@ export function RunDetail({ snap }: { snap: RunSnapshot | null }) {
         ))}
         {ungrouped.length > 0 && (
           <div className="flex flex-col gap-0.5 rounded-lg border border-border bg-card/40 p-1.5">
-            {ungrouped.map((a, i) => (
-              <AgentRow key={a.index} agent={a} last={i === ungrouped.length - 1} active={a.index === activeIndex} onClick={() => pick(a.index)} />
+            {ungrouped.map((a) => (
+              <AgentRow key={a.index} agent={a} active={a.index === activeIndex} onClick={() => pick(a.index)} />
             ))}
           </div>
         )}

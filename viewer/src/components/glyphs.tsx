@@ -1,25 +1,34 @@
 import type { ReactNode } from "react"
 
+import { ClaudeIcon } from "@/components/icons/ClaudeIcon"
+import { OpenAiIcon } from "@/components/icons/OpenAiIcon"
+import { Icon } from "@/components/ui/icon"
 import type { AgentState, ProviderId, RunStatus } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
-/** Status glyph shared by runs and agents: ✓ done · ✗ failed · spinner running · ◌ queued. */
+/**
+ * Status glyph — quiet by design: success shows NOTHING (returns null), only states that
+ * need attention render. Running = spinning dashed circle (bb's sidebar idiom), failed = red
+ * X, queued = a dim static dashed circle.
+ */
 export function StatusGlyph({ state, className }: { state: AgentState | RunStatus; className?: string }) {
-  const running = state === "running" || state === "started"
-  const ok = state === "done" || state === "completed"
-  const fail = state === "failed" || state === "interrupted"
-  if (running) return <span className={cn("inline-block animate-spin text-primary", className)}>◐</span>
-  if (ok) return <span className={cn("text-success", className)}>✓</span>
-  if (fail) return <span className={cn("text-destructive", className)}>✗</span>
-  if (state === "queued") return <span className={cn("text-muted-foreground/60", className)}>◌</span>
-  if (state === "skipped") return <span className={cn("text-muted-foreground/60", className)}>⊘</span>
-  return <span className={cn("text-muted-foreground", className)}>•</span>
+  if (state === "running" || state === "started") {
+    return <Icon name="Spinner" className={cn("size-3.5 animate-spin text-muted-foreground", className)} aria-label="in progress" />
+  }
+  if (state === "failed" || state === "interrupted") {
+    return <Icon name="CircleX" className={cn("size-3.5 text-destructive", className)} aria-label="failed" />
+  }
+  if (state === "queued") {
+    return <Icon name="Spinner" className={cn("size-3.5 text-muted-foreground/35", className)} aria-label="queued" />
+  }
+  // done / completed / skipped — success is silent.
+  return null
 }
 
-/** Provider accent dot (blue codex / amber claude). */
-export function ProviderDot({ provider, className }: { provider: ProviderId; className?: string }) {
-  const color = provider === "claude-code" ? "var(--claude)" : "var(--codex)"
-  return <span className={cn("inline-block size-1.5 shrink-0 rounded-full", className)} style={{ background: color }} aria-hidden />
+/** Provider brand mark (OpenAI for codex, Anthropic/Claude for claude-code). */
+export function ProviderIcon({ provider, className }: { provider: ProviderId; className?: string }) {
+  const Brand = provider === "claude-code" ? ClaudeIcon : OpenAiIcon
+  return <Brand className={cn("size-3.5 shrink-0 text-muted-foreground", className)} />
 }
 
 /** Shimmering in-progress text (bb's animate-shine). */

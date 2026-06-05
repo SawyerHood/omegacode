@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef } from "react"
 import { useNavigate, useParams } from "react-router-dom"
 
-import { ProviderDot, StatusGlyph } from "@/components/glyphs"
+import { ProviderIcon, StatusGlyph } from "@/components/glyphs"
 import { ConversationMessageContent } from "@/components/timeline/ConversationMessageContent"
 import { ThreadTimelineFeed } from "@/components/timeline/ThreadTimelineFeed"
 import { useAgentStream } from "@/lib/hooks"
@@ -42,7 +42,7 @@ export function AgentChat({ agent }: { agent?: AgentSnapshot }) {
         <StatusGlyph state={state} className="text-sm" />
         <span className="truncate text-sm font-medium">{label}</span>
         <span className="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground">
-          <ProviderDot provider={provider} />
+          <ProviderIcon provider={provider} />
           {provider}
           {model && <span className="text-subtle-foreground">· {model}</span>}
         </span>
