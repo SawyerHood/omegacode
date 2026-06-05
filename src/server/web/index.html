@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>agent-workflows</title>
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <div class="app">
+      <header class="topbar">
+        <div class="brand">
+          <span class="star">✦</span>
+          <span class="brand-name">agent-workflows</span>
+        </div>
+        <div id="topstatus" class="topstatus"></div>
+      </header>
+      <main class="layout">
+        <aside class="sidebar">
+          <div class="sidebar-head">
+            <span>Runs</span>
+            <span id="run-count" class="sidebar-count"></span>
+          </div>
+          <ul id="run-list" class="run-list">
+            <li class="empty">Loading…</li>
+          </ul>
+        </aside>
+        <section id="detail" class="detail">
+          <div class="placeholder">
+            <div class="placeholder-star">✦</div>
+            <div>Select a run to view its phase tree.</div>
+          </div>
+        </section>
+        <aside id="drilldown" class="drilldown" hidden></aside>
+      </main>
+      <div id="drilldown-scrim" class="drilldown-scrim" hidden></div>
+    </div>
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>
