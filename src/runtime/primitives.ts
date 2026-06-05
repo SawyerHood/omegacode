@@ -233,6 +233,13 @@ export class Runtime {
         this.totalUsage = addUsage(this.totalUsage, result.usage)
         const branch = worktree?.branch
         this.o.journal.append({ type: "result", key, index, status: result.status, result: value, usage: result.usage, provider: spec.provider, worktreeBranch: branch, durationMs })
+        // Surface the validated structured output in the chat feed as a JSON code block
+        // (uniform across providers — Claude's lives only in the result channel, and codex's
+        // extraction turn is silent).
+        if (spec.schema && value !== undefined) {
+          // Leading blank line so the fence starts its own line even when coalesced after prose.
+          transcript.write({ kind: "text", text: "\n\n```json\n" + JSON.stringify(value, null, 2) + "\n```\n" })
+        }
         transcript.write({ kind: "status", state: "done" })
         this.o.events.emit({ type: "agent", index, phaseIndex, phaseTitle, label, provider: spec.provider, model: spec.model, state: "done", durationMs, inputTokens: result.usage.inputTokens, outputTokens: result.usage.outputTokens, costUsd: result.usage.costUsd, resultPreview: preview(value) })
         return value as T

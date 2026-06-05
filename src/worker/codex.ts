@@ -44,6 +44,14 @@ interface PendingRequest {
 
 const PROVIDER = "codex" as const
 
+/** The silent second-turn prompt that extracts the final structured answer. */
+const EXTRACTION_PROMPT =
+  "Now return your final answer as a single JSON value that conforms to the required output schema. Output only the JSON — no prose, no explanation, no code fences."
+
+function textInput(text: string): TurnStartParams["input"] {
+  return [{ type: "text", text, text_elements: [] }]
+}
+
 function isObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value)
 }
@@ -63,8 +71,9 @@ interface TurnState {
   settled: boolean
   ctx: WorkerContext
   sandbox: AgentSpec["sandbox"]
-  /** Whether the spec carried a schema → parse final text into `structured`. */
-  wantsStructured: boolean
+  /** Whether to forward this turn's messages to the live transcript. The silent
+   *  schema-extraction turn (two-phase structured output) sets this false. */
+  forwardProgress: boolean
 }
 
 export class CodexWorker implements Worker {
@@ -107,8 +116,56 @@ export class CodexWorker implements Worker {
       })
     }
 
-    // 2. Register turn state + wire abort/cleanup, then send turn/start.
-    return await new Promise<AgentResult>((resolve, reject) => {
+    // 2. Two-phase structured output — match the native Claude SDK behavior.
+    //    A free-form WORKING turn (no schema → prose + tools, streamed to the
+    //    transcript), then — only when a schema is set — a silent EXTRACTION turn
+    //    constrained by outputSchema that emits just the final JSON. Codex's
+    //    outputSchema otherwise constrains EVERY assistant message in the turn.
+    const baseTurn = {
+      threadId,
+      approvalPolicy: toCodexApprovalPolicy(spec.sandbox, spec.approval),
+      sandboxPolicy: toCodexSandboxPolicy(spec.sandbox, spec.cwd),
+      ...(spec.model ? { model: spec.model } : {}),
+      ...(toCodexEffort(spec.effort) ? { effort: toCodexEffort(spec.effort) } : {}),
+    }
+
+    const working = await this.runTurn(ctx, spec.sandbox, { ...baseTurn, input: textInput(spec.prompt) }, true)
+    if (!spec.schema) return working
+
+    const extraction = await this.runTurn(
+      ctx,
+      spec.sandbox,
+      { ...baseTurn, input: textInput(EXTRACTION_PROMPT), outputSchema: toCodexOutputSchema(spec.schema) },
+      false,
+    )
+    let structured: unknown
+    try {
+      structured = parseJsonLoose(extraction.text)
+    } catch {
+      structured = undefined
+    }
+    return {
+      text: extraction.text,
+      structured,
+      status: "completed",
+      usage: {
+        inputTokens: working.usage.inputTokens + extraction.usage.inputTokens,
+        outputTokens: working.usage.outputTokens + extraction.usage.outputTokens,
+        costUsd: (working.usage.costUsd ?? 0) + (extraction.usage.costUsd ?? 0),
+      },
+    }
+  }
+
+  /** Run one codex turn on an existing thread; resolves on turn completion. */
+  private runTurn(
+    ctx: WorkerContext,
+    sandbox: AgentSpec["sandbox"],
+    turnParams: TurnStartParams,
+    forwardProgress: boolean,
+  ): Promise<AgentResult> {
+    const { threadId } = turnParams
+    let onAbort: (() => void) | undefined
+    const p = new Promise<AgentResult>((resolve, reject) => {
       const state: TurnState = {
         threadId,
         deltaText: "",
@@ -117,12 +174,11 @@ export class CodexWorker implements Worker {
         reject,
         settled: false,
         ctx,
-        sandbox: spec.sandbox,
-        wantsStructured: spec.schema !== undefined,
+        sandbox,
+        forwardProgress,
       }
       this.turns.set(threadId, state)
-
-      const onAbort = () => {
+      onAbort = () => {
         this.send(encodeRequest(this.allocId(), "turn/interrupt", { threadId }))
         this.settleReject(threadId, new AgentInterrupted())
       }
@@ -130,24 +186,14 @@ export class CodexWorker implements Worker {
         onAbort()
         return
       }
-      ctx.signal.addEventListener("abort", onAbort, { once: true })
-
-      const turnParams: TurnStartParams = {
-        threadId,
-        input: [{ type: "text", text: spec.prompt, text_elements: [] }],
-        approvalPolicy: toCodexApprovalPolicy(spec.sandbox, spec.approval),
-        sandboxPolicy: toCodexSandboxPolicy(spec.sandbox, spec.cwd),
-        ...(spec.model ? { model: spec.model } : {}),
-        ...(toCodexEffort(spec.effort) ? { effort: toCodexEffort(spec.effort) } : {}),
-        ...(spec.schema ? { outputSchema: toCodexOutputSchema(spec.schema) } : {}),
-      }
-
+      ctx.signal.addEventListener("abort", onAbort)
       this.request("turn/start", turnParams).catch((err: unknown) => {
-        // A failed turn/start request (e.g. transport) aborts the turn.
         this.settleReject(threadId, this.toAgentError(err))
       })
-    }).finally(() => {
+    })
+    return p.finally(() => {
       this.turns.delete(threadId)
+      if (onAbort) ctx.signal.removeEventListener("abort", onAbort)
     })
   }
 
@@ -326,13 +372,13 @@ export class CodexWorker implements Worker {
         const state = this.turns.get(p.threadId)
         if (!state || typeof p.delta !== "string") return
         state.deltaText += p.delta
-        state.ctx.onProgress({ kind: "text", text: p.delta })
+        if (state.forwardProgress) state.ctx.onProgress({ kind: "text", text: p.delta })
         return
       }
       case "item/reasoning/summaryTextDelta":
       case "item/reasoning/textDelta": {
         const state = typeof params.threadId === "string" ? this.turns.get(params.threadId) : undefined
-        if (state && typeof params.delta === "string") state.ctx.onProgress({ kind: "reasoning", text: params.delta })
+        if (state && state.forwardProgress && typeof params.delta === "string") state.ctx.onProgress({ kind: "reasoning", text: params.delta })
         return
       }
       case "item/started": {
@@ -341,7 +387,7 @@ export class CodexWorker implements Worker {
         if (!state || !isObject(p.item)) return
         const item = p.item as Record<string, unknown>
         const name = toolName(p.item)
-        if (name) state.ctx.onProgress({ kind: "tool", id: typeof item.id === "string" ? item.id : undefined, name, input: codexToolInput(item) })
+        if (name && state.forwardProgress) state.ctx.onProgress({ kind: "tool", id: typeof item.id === "string" ? item.id : undefined, name, input: codexToolInput(item) })
         return
       }
       case "item/completed": {
@@ -354,7 +400,7 @@ export class CodexWorker implements Worker {
           return
         }
         const name = toolName(p.item)
-        if (name) {
+        if (name && state.forwardProgress) {
           const output =
             typeof item.aggregatedOutput === "string" ? item.aggregatedOutput : typeof item.result === "string" ? item.result : undefined
           state.ctx.onProgress({
@@ -378,10 +424,11 @@ export class CodexWorker implements Worker {
             outputTokens: numberOr(total.outputTokens, state.usage.outputTokens),
             costUsd: state.usage.costUsd,
           }
-          state.ctx.onProgress({
-            kind: "usage",
-            usage: { inputTokens: state.usage.inputTokens, outputTokens: state.usage.outputTokens },
-          })
+          if (state.forwardProgress)
+            state.ctx.onProgress({
+              kind: "usage",
+              usage: { inputTokens: state.usage.inputTokens, outputTokens: state.usage.outputTokens },
+            })
         }
         return
       }
@@ -400,14 +447,11 @@ export class CodexWorker implements Worker {
     if (!state) return
     const status = isObject(p.turn) ? p.turn.status : undefined
     if (status === "completed") {
-      const text = state.finalMessage ?? state.deltaText
-      const result: AgentResult = {
-        text,
+      this.settleResolve(p.threadId, {
+        text: state.finalMessage ?? state.deltaText,
         status: "completed",
         usage: state.usage,
-        structured: this.maybeStructured(state, text),
-      }
-      this.settleResolve(p.threadId, result)
+      })
       return
     }
     if (status === "interrupted") {
@@ -428,17 +472,6 @@ export class CodexWorker implements Worker {
         retryable: isRetryableCodexError(codexErrorCode(info)),
       }),
     )
-  }
-
-  /** When the spec carried a schema, best-effort parse the final assistant
-   *  text as JSON. The runtime re-validates, so failures swallow to undefined. */
-  private maybeStructured(state: TurnState, text: string): unknown {
-    if (!state.wantsStructured) return undefined
-    try {
-      return parseJsonLoose(text)
-    } catch {
-      return undefined
-    }
   }
 
   private settleResolve(threadId: string, result: AgentResult): void {
