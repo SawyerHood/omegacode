@@ -39,14 +39,14 @@ export function AgentChat({ agent }: { agent?: AgentSnapshot }) {
   return (
     <div className="flex h-full min-h-0 flex-col bg-background">
       <header className="flex items-center gap-2 border-b border-border px-4 py-2.5">
-        <StatusGlyph state={state} className="text-sm" />
-        <span className="truncate text-sm font-medium">{label}</span>
+        <span className="min-w-0 flex-1 truncate text-sm font-medium">{label}</span>
         <span className="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground">
           <ProviderIcon provider={provider} />
           {provider}
           {model && <span className="text-subtle-foreground">· {model}</span>}
         </span>
-        {stats.length > 0 && <span className="ml-auto shrink-0 font-mono text-[11px] text-subtle-foreground">{stats.join(" · ")}</span>}
+        {stats.length > 0 && <span className="shrink-0 font-mono text-[11px] text-subtle-foreground">{stats.join(" · ")}</span>}
+        <StatusGlyph state={state} className="shrink-0" />
         <button
           onClick={() => navigate(`/run/${id}`)}
           className="ml-2 shrink-0 rounded p-1 text-muted-foreground transition-colors hover:bg-state-hover hover:text-foreground"

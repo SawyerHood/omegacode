@@ -41,7 +41,6 @@ function AgentRow({ agent, active, onClick }: { agent: AgentSnapshot; active: bo
         active && "bg-surface-selected",
       )}
     >
-      <StatusGlyph state={agent.state} className="mt-0.5 size-3.5" />
       <ProviderIcon provider={agent.provider} className="mt-0.5" />
       <span className="min-w-0 flex-1">
         <span className="flex items-baseline gap-1.5">
@@ -53,7 +52,7 @@ function AgentRow({ agent, active, onClick }: { agent: AgentSnapshot; active: bo
           <span className="mt-0.5 block font-mono text-[11px] break-words text-destructive">└ {agent.error}</span>
         )}
       </span>
-      <span className="mt-0.5 shrink-0 text-xs text-transparent group-hover:text-muted-foreground">›</span>
+      <StatusGlyph state={agent.state} className="mt-0.5 shrink-0" />
     </button>
   )
 }
@@ -71,9 +70,9 @@ function PhaseGroup({
   return (
     <div className="overflow-hidden rounded-lg border border-border bg-card/40">
       <div className="flex items-center gap-2 border-b border-border/60 bg-surface-raised px-3 py-1.5">
-        <StatusGlyph state={rollup(phase.agents)} className="text-xs" />
         <span className="text-sm font-semibold">{phase.title}</span>
-        <span className="ml-auto font-mono text-[11px] text-subtle-foreground">
+        <span className="ml-auto flex items-center gap-2 font-mono text-[11px] text-subtle-foreground">
+          <StatusGlyph state={rollup(phase.agents)} />
           {done}/{phase.agents.length}
         </span>
       </div>
@@ -118,7 +117,6 @@ export function RunDetail({ snap }: { snap: RunSnapshot | null }) {
     <div className="flex h-full min-h-0 flex-col">
       <header className="border-b border-border px-4 py-2.5">
         <div className="flex items-center gap-2">
-          <StatusGlyph state={snap.status} className="text-sm" />
           <span className="truncate font-mono text-sm font-semibold">{snap.name ?? snap.runId}</span>
           <span
             className={cn(
