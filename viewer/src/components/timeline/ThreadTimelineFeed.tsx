@@ -1,16 +1,23 @@
 // Driver that renders a `ThreadEventItem[]` through bb's leaf timeline
-// components. This stands in for bb's ThreadTimelineRows / TimelineRowView /
-// TimelineExpandableBody routing: it walks the items, builds a row title per
-// item kind, and renders each leaf body through the ported bb components
-// (TerminalOutputBlock, ToolCallDetailBlock, TimelineFileDiffBlock,
-// ConversationMessageContent, ExpandableTimelineRow, TimelineWorkingIndicator).
+// components, replicating bb's thread-timeline step grouping + collapse.
 //
-// bb's full projection (build-thread-timeline → buildTimelineViewRows → rich
-// TimelineTitle segments, turn/bundle grouping, lazy turn-detail queries, jotai
-// layout atoms, realtime client) is too coupled to the bb app to lift wholesale
-// — so per the port plan's fallback, the rendering primitives are bb's actual
-// components, driven by this per-chunk loop.
-import { Fragment, useMemo, type ReactNode } from "react"
+// bb (packages/thread-view/src/timeline-view.ts → buildTimelineViewRows) walks
+// its rows and groups consecutive summarizable *work* (commands / tools /
+// file-changes) into "steps", split by assistant-message / reasoning
+// boundaries. A step that's closed (an assistant message follows it, or the run
+// has finished past it) collapses into a one-line **step-summary** ("Ran 3
+// commands · Read 5 files · Edited 2 files") that expands to the individual
+// rows; the trailing step of a live run — or any step still holding a pending
+// row — stays expanded so the active frontier is visible. A step with a single
+// work row stays bare (bb only summarizes multi-row bundles).
+//
+// This file mirrors that algorithm against the viewer's trimmed item model.
+// The per-item leaf rendering (TerminalOutputBlock, ToolCallDetailBlock,
+// TimelineFileDiffBlock, ConversationMessageContent, ExpandableTimelineRow) is
+// bb's ported components; the label/verb/count logic lives in
+// lib/thread-view/work-summary.ts (a port of bb's summarizeTimelineWork +
+// timeline-row-title verbs).
+import { Fragment, useCallback, useMemo, useState, type ReactNode } from "react"
 import type { ThreadEventItem } from "@/lib/thread-events"
 import {
   getFileChangeAction,
@@ -18,18 +25,25 @@ import {
   getFileChangeDiffStats,
   fileNameFromPath,
 } from "@/lib/thread-view/file-change-summary"
+import { buildWorkSummaryLabel } from "@/lib/thread-view/work-summary"
 import { cn } from "@/lib/utils"
 import { AutoHeightContainer } from "@/components/ui/height-transition"
 import { DiffStatsTally } from "@/components/ui/diff-stats-tally"
 import { Icon, type IconName } from "@/components/ui/icon"
 import { ConversationMessageContent } from "./ConversationMessageContent"
 import { ExpandableTimelineRow } from "./ExpandableTimelineRow"
+import { ExpandablePanel } from "@/components/ui/disclosure"
 import { TerminalOutputBlock } from "./TerminalOutputBlock"
 import { ToolCallDetailBlock } from "./ToolCallDetailBlock"
 import { TimelineFileDiffBlock } from "./TimelineFileDiffBlock"
 import { TimelineWorkingIndicator } from "./TimelineWorkingIndicator"
 
 const NESTED_ROWS_GROUP_LINE_CLASS = "relative my-0"
+
+// bb's left guide/indent for nested grouped rows (ThreadTimelineRows.tsx
+// NESTED_ROWS_GROUP_LINE_CLASS): a hairline rule down the left edge.
+const STEP_CHILDREN_GUIDE_CLASS =
+  "relative pl-3 pr-2 before:pointer-events-none before:absolute before:bottom-1 before:left-1.5 before:top-0 before:w-px before:bg-border-hairline before:content-['']"
 
 export interface ThreadTimelineFeedProps {
   items: ThreadEventItem[]
@@ -210,6 +224,104 @@ function TimelineItemRow({ item, autoExpanded, streaming, workspaceRootPath }: T
   }
 }
 
+// ---------------------------------------------------------------------------
+// Step grouping. A "rendered unit" is either a standalone boundary row
+// (userMessage / agentMessage / reasoning) or a step: a run of consecutive
+// work items (commandExecution / toolCall / fileChange). Mirrors bb's
+// buildTimelineViewRows boundary handling.
+// ---------------------------------------------------------------------------
+
+const WORK_TYPES = new Set(["commandExecution", "toolCall", "fileChange"])
+
+function isWorkItem(item: ThreadEventItem): boolean {
+  return WORK_TYPES.has(item.type)
+}
+
+function isPendingWork(item: ThreadEventItem): boolean {
+  return (
+    (item.type === "commandExecution" || item.type === "toolCall" || item.type === "fileChange") &&
+    item.status === "pending"
+  )
+}
+
+interface BoundaryUnit {
+  kind: "boundary"
+  item: ThreadEventItem
+}
+interface StepUnit {
+  kind: "step"
+  id: string
+  items: ThreadEventItem[]
+}
+type RenderedUnit = BoundaryUnit | StepUnit
+
+function groupIntoUnits(items: ThreadEventItem[]): RenderedUnit[] {
+  const units: RenderedUnit[] = []
+  let step: ThreadEventItem[] = []
+  const flush = () => {
+    if (step.length > 0) {
+      units.push({ kind: "step", id: `step-${step[0]!.id}`, items: step })
+      step = []
+    }
+  }
+  for (const item of items) {
+    if (isWorkItem(item)) {
+      step.push(item)
+    } else {
+      // agentMessage / reasoning / userMessage close the open step and render
+      // as their own boundary row (bb: isTimelineStepBoundary).
+      flush()
+      units.push({ kind: "boundary", item })
+    }
+  }
+  flush()
+  return units
+}
+
+// ---------------------------------------------------------------------------
+// A collapsed step renders as a single summary row (bb step-summary, muted
+// "background" tone) that expands to its individual leaf rows.
+// ---------------------------------------------------------------------------
+
+interface CollapsedStepProps {
+  items: ThreadEventItem[]
+  streaming: boolean
+  workspaceRootPath?: string
+}
+
+function CollapsedStep({ items, streaming, workspaceRootPath }: CollapsedStepProps) {
+  const [isExpanded, setIsExpanded] = useState(false)
+  const onToggle = useCallback(() => setIsExpanded((v) => !v), [])
+  // Completed step → past-tense verbs ("Ran 3 commands · Read 5 files").
+  const label = useMemo(() => buildWorkSummaryLabel(items, false), [items])
+
+  return (
+    <ExpandablePanel
+      isExpanded={isExpanded}
+      onToggle={onToggle}
+      headerToneClass="text-subtle-foreground transition-colors hover:text-muted-foreground focus-visible:text-muted-foreground"
+      summaryContent={<span className="truncate text-sm">{label}</span>}
+      className="w-full"
+      headerClassName="timeline-row-header flex w-full max-w-full justify-start py-0 leading-5 px-2"
+      contentClassName="px-0 pb-1 pt-0.5"
+      renderBody={() => (
+        <div className={cn("flex min-w-0 flex-col gap-1", STEP_CHILDREN_GUIDE_CLASS)} data-timeline-row-list="bundle">
+          {items.map((item) => (
+            <div key={item.id} data-timeline-row-id={item.id}>
+              <TimelineItemRow
+                item={item}
+                autoExpanded={false}
+                streaming={streaming}
+                workspaceRootPath={workspaceRootPath}
+              />
+            </div>
+          ))}
+        </div>
+      )}
+    />
+  )
+}
+
 export function ThreadTimelineFeed({
   items,
   streaming = false,
@@ -218,37 +330,83 @@ export function ThreadTimelineFeed({
   showWorking = false,
   workingIsThinking = false,
 }: ThreadTimelineFeedProps) {
+  const units = useMemo(() => groupIntoUnits(items), [items])
+
   // Mirror bb: while the run is live, the active (last) pending row auto-expands
   // and streams its output. Completed rows stay collapsed.
-  const lastPendingIndex = useMemo(() => {
-    if (!streaming) return -1
+  const lastPendingId = useMemo(() => {
+    if (!streaming) return null
     for (let i = items.length - 1; i >= 0; i--) {
       const item = items[i]!
-      if (
-        (item.type === "commandExecution" || item.type === "toolCall" || item.type === "fileChange") &&
-        item.status === "pending"
-      ) {
-        return i
-      }
+      if (isPendingWork(item)) return item.id
+    }
+    return null
+  }, [items, streaming])
+
+  // Index of the last step unit — bb keeps the trailing step of a live run
+  // expanded (it's the activity frontier), collapsing earlier closed steps.
+  const lastStepIndex = useMemo(() => {
+    for (let i = units.length - 1; i >= 0; i--) {
+      if (units[i]!.kind === "step") return i
     }
     return -1
-  }, [items, streaming])
+  }, [units])
 
   return (
     <AutoHeightContainer>
       <div className={cn("flex min-w-0 flex-col gap-4", NESTED_ROWS_GROUP_LINE_CLASS)} data-timeline-row-list="top-level">
-        {items.map((item, index) => (
-          <Fragment key={item.id}>
-            <div data-timeline-row-id={item.id}>
-              <TimelineItemRow
-                item={item}
-                autoExpanded={index === lastPendingIndex}
-                streaming={streaming}
-                workspaceRootPath={workspaceRootPath}
-              />
-            </div>
-          </Fragment>
-        ))}
+        {units.map((unit, index) => {
+          if (unit.kind === "boundary") {
+            const autoExpanded = unit.item.id === lastPendingId
+            return (
+              <Fragment key={unit.item.id}>
+                <div data-timeline-row-id={unit.item.id}>
+                  <TimelineItemRow
+                    item={unit.item}
+                    autoExpanded={autoExpanded}
+                    streaming={streaming}
+                    workspaceRootPath={workspaceRootPath}
+                  />
+                </div>
+              </Fragment>
+            )
+          }
+
+          // A step expands inline (individual rows) when it's the live frontier
+          // (last step + streaming) or holds a pending row; otherwise it
+          // collapses to a one-line step-summary. A single-row step never gets
+          // summarized — it renders bare (bb closeOpenStepAtBoundary).
+          const hasPending = unit.items.some(isPendingWork)
+          const isLiveFrontier = streaming && index === lastStepIndex
+          const expanded = unit.items.length === 1 || hasPending || isLiveFrontier
+
+          if (!expanded) {
+            return (
+              <Fragment key={unit.id}>
+                <div data-timeline-row-id={unit.id}>
+                  <CollapsedStep items={unit.items} streaming={streaming} workspaceRootPath={workspaceRootPath} />
+                </div>
+              </Fragment>
+            )
+          }
+
+          return (
+            <Fragment key={unit.id}>
+              <div className="flex min-w-0 flex-col gap-4" data-timeline-row-list="step" data-timeline-row-id={unit.id}>
+                {unit.items.map((item) => (
+                  <div key={item.id} data-timeline-row-id={item.id}>
+                    <TimelineItemRow
+                      item={item}
+                      autoExpanded={item.id === lastPendingId}
+                      streaming={streaming}
+                      workspaceRootPath={workspaceRootPath}
+                    />
+                  </div>
+                ))}
+              </div>
+            </Fragment>
+          )
+        })}
         {showWorking ? <TimelineWorkingIndicator label={workingLabel} isThinking={workingIsThinking} /> : null}
       </div>
     </AutoHeightContainer>
