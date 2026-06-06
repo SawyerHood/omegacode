@@ -195,14 +195,16 @@ async function cmdRun(flags: Flags): Promise<void> {
   const argsFile = str(flags["args-file"])
   if (argsFile) args = JSON.parse(readFileSync(resolve(argsFile), "utf8"))
 
-  // Auto-start the viewer (unless --no-serve / --json) and print the run's URL when it starts.
-  const wantServe = flags["no-serve"] !== true && flags.json !== true
+  // Auto-start the viewer (unless --no-serve) and surface the run's URL. Under --json the
+  // viewer still comes up, but stdout stays pure JSON: the `view:` line is suppressed and the
+  // URL is returned in the JSON `url` field instead.
+  const wantServe = flags["no-serve"] !== true
   const port = flags.port ? Number(str(flags.port)) : 4123
   const base = wantServe ? await ensureViewer(port).catch(() => undefined) : undefined
   const onStart = base
     ? (runId: string) => {
         const u = `${base}#/run/${runId}`
-        process.stderr.write(`view: ${u}\n`)
+        if (flags.json !== true) process.stderr.write(`view: ${u}\n`)
         if (flags.open === true) openBrowser(u)
       }
     : undefined
@@ -218,7 +220,8 @@ async function cmdRun(flags: Flags): Promise<void> {
   })
 
   if (flags.json === true) {
-    process.stdout.write(JSON.stringify({ runId: outcome.runId, status: outcome.status, result: outcome.result, error: outcome.error }, null, 2) + "\n")
+    const url = base ? `${base}#/run/${outcome.runId}` : undefined
+    process.stdout.write(JSON.stringify({ runId: outcome.runId, status: outcome.status, url, result: outcome.result, error: outcome.error }, null, 2) + "\n")
   } else if (outcome.status === "completed") {
     const r = outcome.result
     process.stdout.write((typeof r === "string" ? r : JSON.stringify(r, null, 2)) + "\n")
@@ -313,11 +316,12 @@ Usage:
       --budget <N>                         output-token ceiling (enables budget.*)
       --resume <runId>                     replay unchanged prefix, re-run the rest
       --fake                               run with a fake worker (no real agents)
-      --json                               print {runId,status,result,error} as JSON
+      --json                               print {runId,status,url,result,error} as JSON (viewer still starts)
       --open                               also open the browser to this run
       --no-serve                           don't auto-start the viewer
 
-  By default \`run\` auto-starts the viewer (if not already up) and prints the run's URL.
+  By default \`run\` auto-starts the viewer (if not already up) and prints the run's URL
+  (with --json the URL is in the JSON \`url\` field and the \`view:\` line is suppressed).
 
   omegacode serve [--port 4123] [--host h] [--idle-shutdown]   Live read-only web viewer of all runs
   omegacode runs [--prune --keep <N>]           List runs (or prune old ones)
