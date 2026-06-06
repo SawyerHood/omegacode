@@ -1,3 +1,5 @@
+![omegacode](omega-logos/header.jpg)
+
 # omegacode
 
 [![CI](https://github.com/SawyerHood/omegacode/actions/workflows/ci.yml/badge.svg)](https://github.com/SawyerHood/omegacode/actions/workflows/ci.yml)
