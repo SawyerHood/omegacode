@@ -2,6 +2,22 @@
   "name": "omegacode",
   "version": "0.0.1",
   "description": "Run JS workflow files that orchestrate Codex and Claude Code agents (agent()/parallel()/pipeline()/phase()).",
+  "license": "MIT",
+  "author": "Sawyer Hood",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/SawyerHood/omegacode.git"
+  },
+  "homepage": "https://github.com/SawyerHood/omegacode#readme",
+  "keywords": [
+    "agents",
+    "workflow",
+    "orchestration",
+    "claude",
+    "codex",
+    "multi-agent",
+    "cli"
+  ],
   "type": "module",
   "bin": {
     "omegacode": "dist/cli.js"
@@ -19,6 +35,7 @@
   },
   "scripts": {
     "build": "pnpm -C viewer build && tsup",
+    "prepublishOnly": "npm run build",
     "typecheck": "tsc --noEmit",
     "dev": "tsx src/cli.ts",
     "test": "node --test --import tsx ./test/*.test.ts",
