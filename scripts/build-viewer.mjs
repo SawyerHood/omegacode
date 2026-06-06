@@ -22,7 +22,10 @@ function trySpawn(cmd, args) {
 function pnpm(args) {
   let r = trySpawn("pnpm", args)
   // ENOENT = pnpm not installed; npx ships with npm, and pnpm@10 reads lockfileVersion 9.0.
-  if (r.error && r.error.code === "ENOENT") {
+  // Under shell:true (Windows) a missing pnpm is NOT an ENOENT — cmd prints "not recognized"
+  // and exits nonzero — so there ANY bare-pnpm failure falls back to npx. When pnpm exists and
+  // the command legitimately fails, the npx retry fails the same way; one redundant attempt.
+  if ((r.error && r.error.code === "ENOENT") || (onWindows && (r.error || r.status !== 0))) {
     r = trySpawn("npx", ["--yes", "pnpm@10", ...args])
   }
   if (r.error) {

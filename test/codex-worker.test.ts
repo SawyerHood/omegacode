@@ -1,4 +1,4 @@
-import { test } from "node:test"
+import { after, test } from "node:test"
 import assert from "node:assert/strict"
 import { EventEmitter } from "node:events"
 import { mkdtemp, readFile, writeFile } from "node:fs/promises"
@@ -10,6 +10,16 @@ import { CodexWorker, DEFAULT_REQUEST_TIMEOUT_MS, DEFAULT_TURN_STALL_TIMEOUT_MS 
 import { JsonRpcStdioClient, StdioTransportError, JsonRpcResponseError } from "../src/worker/jsonrpc-stdio.js"
 import { AgentError, AgentInterrupted, type WorkerProgress } from "../src/worker/index.js"
 import type { AgentSpec } from "../src/dsl/types.js"
+
+// Several tests await rejections driven by UNREF'D timers (the request timeout, the stall
+// watchdog) while the only "process" alive is a FakeChild with no real handles — so nothing
+// keeps the event loop referenced. node:test on Node 20/22 then drains the loop mid-await and
+// cancels the rest of the file ("Promise resolution is still pending but the event loop has
+// already resolved"); Node 24+ pins the loop itself. A ref'd keep-alive makes the file behave
+// identically on every supported Node line. (In production the spawned codex child's stdio
+// keeps the loop alive, which is exactly why those timers unref.)
+const keepAlive = setInterval(() => {}, 60_000)
+after(() => clearInterval(keepAlive))
 
 // ---------------------------------------------------------------------------
 // A scripted fake child process satisfying the slice of ChildProcessWithoutNullStreams

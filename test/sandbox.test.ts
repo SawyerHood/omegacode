@@ -1,4 +1,4 @@
-import { test } from "node:test"
+import { after, test } from "node:test"
 import assert from "node:assert/strict"
 import {
   parseWorkflow,
@@ -8,6 +8,13 @@ import {
   WorkflowTimeoutError,
 } from "../src/runtime/sandbox.ts"
 import type { WorkflowGlobals } from "../src/dsl/types.ts"
+
+// The execTimeoutMs tests await a rejection driven by an UNREF'D timer (sandbox.ts) while the
+// runaway workflow holds no live handles, so nothing keeps the event loop referenced. node:test
+// on Node 20/22 drains the loop mid-await and cancels the rest of the file; Node 24+ pins the
+// loop itself. A ref'd keep-alive makes the file behave identically on every supported line.
+const keepAlive = setInterval(() => {}, 60_000)
+after(() => clearInterval(keepAlive))
 
 function fakeGlobals(over: Partial<WorkflowGlobals> = {}): WorkflowGlobals {
   return {
