@@ -7,7 +7,7 @@ import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/componen
 function Empty() {
   return (
     <div className="flex h-full flex-col items-center justify-center gap-3 text-muted-foreground">
-      <img src="/icon.png" alt="" className="size-10 rounded-lg opacity-90" />
+      <img src="/icon.svg" alt="" className="size-10 rounded-lg opacity-90" />
       <span className="text-sm">Select a run to view its phase tree.</span>
     </div>
   )

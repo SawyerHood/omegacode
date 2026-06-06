@@ -10,7 +10,7 @@ export function RunList() {
   return (
     <div className="flex h-full min-h-0 flex-col bg-sidebar">
       <div className="flex items-center gap-2 border-b border-border px-3 py-2.5">
-        <img src="/icon.png" alt="" className="size-5 shrink-0 rounded" />
+        <img src="/icon.svg" alt="" className="size-5 shrink-0 rounded" />
         <span className="text-sm font-semibold tracking-tight">agent-workflows</span>
       </div>
       <div className="flex items-center justify-between px-3 pt-3 pb-1 text-[11px] tracking-wide text-subtle-foreground uppercase">
