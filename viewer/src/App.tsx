@@ -1,5 +1,6 @@
 import { Route, Routes } from "react-router-dom"
 
+import { OmegaIcon } from "@/components/icons/OmegaIcon"
 import { RunList } from "@/components/RunList"
 import { RunView } from "@/components/RunView"
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable"
@@ -7,7 +8,7 @@ import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/componen
 function Empty() {
   return (
     <div className="flex h-full flex-col items-center justify-center gap-3 text-muted-foreground">
-      <img src="/icon.svg" alt="" className="size-10 rounded-lg opacity-90" />
+      <OmegaIcon className="size-10 opacity-90" />
       <span className="text-sm">Select a run to view its phase tree.</span>
     </div>
   )

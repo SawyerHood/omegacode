@@ -136,17 +136,7 @@ export function RunDetail({ snap }: { snap: RunSnapshot | null }) {
       <header className="border-b border-border px-4 py-2.5">
         <div className="flex items-center gap-2">
           <span className="truncate font-mono text-sm font-semibold">{snap.name ?? snap.runId}</span>
-          <span
-            className={cn(
-              "rounded px-1.5 py-0.5 text-[10px] font-medium tracking-wide uppercase",
-              snap.status === "completed" && "bg-success/15 text-success",
-              snap.status === "started" && "bg-primary/15 text-primary",
-              (snap.status === "failed" || snap.status === "interrupted") && "bg-destructive/15 text-destructive",
-              snap.status === "unknown" && "bg-muted text-muted-foreground",
-            )}
-          >
-            {snap.status}
-          </span>
+          <StatusGlyph state={snap.status} />
           <span className="ml-auto shrink-0 font-mono text-[11px] text-subtle-foreground">{stats.join(" · ")}</span>
         </div>
         {lastLog && <div className="mt-1.5 truncate font-mono text-[11px] text-muted-foreground">❯ {lastLog.message}</div>}

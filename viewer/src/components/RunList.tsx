@@ -1,6 +1,7 @@
 import { NavLink } from "react-router-dom"
 
 import { StatusGlyph } from "@/components/glyphs"
+import { OmegaIcon } from "@/components/icons/OmegaIcon"
 import { timeAgo } from "@/lib/format"
 import { useRuns } from "@/lib/hooks"
 import { cn } from "@/lib/utils"
@@ -10,7 +11,7 @@ export function RunList() {
   return (
     <div className="flex h-full min-h-0 flex-col bg-sidebar">
       <div className="flex items-center gap-2 border-b border-border px-3 py-2.5">
-        <img src="/icon.svg" alt="" className="size-5 shrink-0 rounded" />
+        <OmegaIcon className="size-5 shrink-0 text-foreground" />
         <span className="text-sm font-semibold tracking-tight">omegacode</span>
       </div>
       <div className="flex items-center justify-between px-3 pt-3 pb-1 text-[11px] tracking-wide text-subtle-foreground uppercase">
