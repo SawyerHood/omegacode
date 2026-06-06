@@ -15,14 +15,18 @@ on:
   pull_request:
   workflow_dispatch:
 
+# cancel-in-progress everywhere (including main): newest commit wins. Without it a hung run
+# blocks every subsequent main push in the queue — which is exactly what happened once.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+  cancel-in-progress: true
 
 jobs:
   test:
     name: ${{ matrix.os }} / node ${{ matrix.node }}
     runs-on: ${{ matrix.os }}
+    # Lanes finish in ~2 min; a hang must fail fast, not sit for the 6h default.
+    timeout-minutes: 10
     continue-on-error: ${{ matrix.experimental }}
     strategy:
       fail-fast: false

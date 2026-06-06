@@ -3,7 +3,7 @@
 // and serves a tiny no-build SPA. node:http only; no extra deps.
 
 import { createReadStream, existsSync } from "node:fs"
-import { readFile, readdir, stat, watch } from "node:fs/promises"
+import { readFile, readdir, realpath, stat, watch } from "node:fs/promises"
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http"
 import { basename, dirname, extname, join, normalize, sep } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -424,12 +424,14 @@ async function tailJsonl(req: IncomingMessage, res: HttpServerResponse, filePath
   let closed = false
   const ac = new AbortController()
   let heartbeat: ReturnType<typeof setInterval> | undefined
+  let pollTimer: ReturnType<typeof setInterval> | undefined
   const cleanup = (): void => {
     if (closed) return
     closed = true
     sseClients = Math.max(0, sseClients - 1)
     ac.abort()
     if (heartbeat) clearInterval(heartbeat)
+    if (pollTimer) clearInterval(pollTimer)
     res.end()
   }
   req.on("close", cleanup)
@@ -504,6 +506,14 @@ async function tailJsonl(req: IncomingMessage, res: HttpServerResponse, filePath
     if (!closed) res.write(": ping\n\n")
   }, 20_000)
 
+  // Belt-and-braces poll: fs.watch delivery is not a correctness guarantee across
+  // platforms/Node lines (missed events hung the suite on linux/node 20). A slow drain
+  // turns any missed event into a ≤1s delay instead of a stream that never delivers.
+  // drain() is offset-based and self-serializing, so overlap with watch events is safe.
+  pollTimer = setInterval(() => {
+    if (!closed) void drain().catch(() => {})
+  }, TAIL_POLL_MS)
+
   // Watch the file's directory so we catch the file being created later, plus appends.
   // The directory may not exist yet (the runtime emits the "running" agent event before
   // creating runs/<id>/agents/), so poll for the directory to appear before watching it
@@ -526,7 +536,11 @@ async function tailJsonl(req: IncomingMessage, res: HttpServerResponse, filePath
     // ever removed, fall back to re-running phase 1 from the top.
     while (!closed) {
       try {
-        const watcher = watch(targetDir, { signal: ac.signal })
+        // Watch the REAL path: on Windows a watched path containing an 8.3 short segment
+        // (e.g. RUNNER~1 in %TEMP%) trips a libuv assert in fs-event.c — a process abort,
+        // not a catchable error — when events report the long-form name.
+        const watchDir = await realpath(targetDir).catch(() => targetDir)
+        const watcher = watch(watchDir, { signal: ac.signal })
         // Drain once more: the file may have been (re)written between the last drain and
         // this watch being armed, in which case no change event would ever fire for it.
         await drain()
@@ -553,6 +567,8 @@ async function tailJsonl(req: IncomingMessage, res: HttpServerResponse, filePath
 
 /** Poll interval while waiting for a not-yet-created directory to appear. */
 const DIR_POLL_MS = 250
+/** Fallback drain cadence for SSE tails — bounds staleness when fs.watch misses an event. */
+const TAIL_POLL_MS = 1000
 
 async function dirNowExists(dir: string): Promise<boolean> {
   return (await nearestExistingDir(dir)) === dir
