@@ -145,16 +145,57 @@ async function cmdRuns(flags: Flags): Promise<void> {
     return
   }
 
+  if (flags["prune-stale"] === true) {
+    const stale = ids.filter((id) => isStaleRun(dir, id))
+    let bytes = 0
+    for (const id of stale) {
+      bytes += dirSize(join(dir, id))
+      rmSync(join(dir, id), { recursive: true, force: true })
+    }
+    console.log(`pruned ${stale.length} stale run(s) (${(bytes / 1e6).toFixed(1)} MB)`)
+    return
+  }
+
   const rows = ids.map((id) => {
     const loaded = Journal.load(id)
     const name = loaded.meta?.workflowFile?.split("/").pop() ?? ""
     const agents = loaded.results.size
     const resultPath = join(dir, id, "result.json")
     const done = existsSync(resultPath)
-    return { id, name, agents, status: done ? "completed" : "?", at: loaded.meta?.createdAt ?? 0 }
+    const status = done ? "completed" : isStaleRun(dir, id) ? "stale" : "?"
+    return { id, name, agents, status, at: loaded.meta?.createdAt ?? 0 }
   })
   rows.sort((a, b) => b.at - a.at)
   for (const r of rows) console.log(`${r.id}  ${r.status.padEnd(10)} ${String(r.agents).padStart(3)} agents  ${r.name}`)
+}
+
+/**
+ * A run stuck at "started" whose heartbeat is missing or older than 20s — its process died
+ * (SIGKILL / crash / closed terminal) without writing a terminal event. The deadman switch.
+ */
+function isStaleRun(runsBase: string, id: string): boolean {
+  const rd = join(runsBase, id)
+  let lastRunStatus: string | undefined
+  try {
+    const lines = readFileSync(join(rd, "events.jsonl"), "utf8").trim().split("\n")
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const m = lines[i]!.match(/"type":"run","status":"([a-z]+)"/)
+      if (m) {
+        lastRunStatus = m[1]
+        break
+      }
+    }
+  } catch {
+    return false
+  }
+  if (lastRunStatus !== "started") return false
+  let beat = 0
+  try {
+    beat = statSync(join(rd, ".heartbeat")).mtimeMs
+  } catch {
+    // no heartbeat file
+  }
+  return Date.now() - beat > 20_000
 }
 
 function dirSize(dir: string): number {
@@ -324,7 +365,7 @@ Usage:
   (with --json the URL is in the JSON \`url\` field and the \`view:\` line is suppressed).
 
   omegacode serve [--port 4123] [--host h] [--idle-shutdown]   Live read-only web viewer of all runs
-  omegacode runs [--prune --keep <N>]           List runs (or prune old ones)
+  omegacode runs [--prune --keep <N>] [--prune-stale]   List runs (--prune old, --prune-stale dead)
   omegacode validate <file.workflow.js>         Parse + check meta without running
   omegacode doctor                              Check codex/claude availability + data dir
   omegacode guide                               Print the full authoring guide (the skill text)

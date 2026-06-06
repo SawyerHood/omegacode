@@ -2,13 +2,13 @@
 // run the sandbox, write the result. One process per run (foreground or detached by the CLI).
 
 import { createHash, randomBytes } from "node:crypto"
-import { readFileSync } from "node:fs"
-import { resolve } from "node:path"
+import { readFileSync, writeFileSync } from "node:fs"
+import { join, resolve } from "node:path"
 import { DEFAULTS, type Effort, type ProviderId, type RunDefaults, type Sandbox } from "../dsl/types.js"
 import { DefaultWorkerFactory } from "../worker/factory.js"
 import { type EventListener, FileEventSink } from "./event-sink.js"
 import { determinismLint } from "./keys.js"
-import { ensureRunDir, Journal, type LoadedJournal, writeResult } from "./journal.js"
+import { ensureRunDir, Journal, type LoadedJournal, runDir, writeResult } from "./journal.js"
 import { Runtime } from "./primitives.js"
 import { parseWorkflow } from "./sandbox.js"
 import { TerminalRenderer } from "./progress.js"
@@ -44,6 +44,9 @@ export interface RunOutcome {
   status: "completed" | "failed" | "interrupted"
   error?: string
 }
+
+/** How often a live run refreshes its heartbeat file (see the deadman switch below). */
+const HEARTBEAT_MS = 5000
 
 export async function runWorkflow(opts: RunOptions): Promise<RunOutcome> {
   const filePath = resolve(opts.file)
@@ -88,6 +91,22 @@ export async function runWorkflow(opts: RunOptions): Promise<RunOutcome> {
 
   events.emit({ type: "run", status: "started", runId, workflowFile: filePath })
 
+  // Deadman switch: touch a heartbeat file while the run is alive. SIGINT/SIGTERM and
+  // crashes still write a terminal event below, but a SIGKILL / power loss / closed
+  // terminal cannot — those leave the run stuck at "started". The viewer and CLI treat
+  // a "started" run with a stale heartbeat as dead, instead of a perpetual spinner.
+  const heartbeatFile = join(runDir(runId), ".heartbeat")
+  const beat = (): void => {
+    try {
+      writeFileSync(heartbeatFile, String(Date.now()))
+    } catch {
+      // best effort — never let heartbeat failure break a run
+    }
+  }
+  beat()
+  const heartbeat = setInterval(beat, HEARTBEAT_MS)
+  heartbeat.unref()
+
   let status: RunOutcome["status"] = "completed"
   let result: unknown
   let error: string | undefined
@@ -99,6 +118,7 @@ export async function runWorkflow(opts: RunOptions): Promise<RunOutcome> {
     status = ac.signal.aborted ? "interrupted" : "failed"
     error = err instanceof Error ? err.message : String(err)
   } finally {
+    clearInterval(heartbeat)
     process.removeListener("SIGINT", onSig)
     process.removeListener("SIGTERM", onSig)
     await factory.shutdownAll()

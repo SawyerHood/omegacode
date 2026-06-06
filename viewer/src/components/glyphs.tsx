@@ -21,6 +21,10 @@ export function StatusGlyph({ state, className, quiet }: { state: AgentState | R
   if (state === "queued") {
     return <Icon name="Spinner" className={cn("size-3.5 text-muted-foreground/35", className)} aria-label="queued" />
   }
+  if (state === "stale") {
+    // Deadman switch: the run's process died without finishing — not a live spinner.
+    return <Icon name="AlertCircle" className={cn("size-3.5 text-muted-foreground", className)} aria-label="stale (run died)" />
+  }
   if (state === "skipped") return null
   // done / completed
   if (quiet) return null

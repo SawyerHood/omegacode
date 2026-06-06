@@ -1,7 +1,7 @@
 // Mirrors the omegacode viewer API (src/server/serve.ts + runtime/events.ts + runtime/transcript.ts).
 
 export type ProviderId = "codex" | "claude-code" | (string & {})
-export type RunStatus = "started" | "completed" | "failed" | "interrupted" | "unknown"
+export type RunStatus = "started" | "completed" | "failed" | "interrupted" | "unknown" | "stale"
 export type AgentState = "queued" | "running" | "done" | "failed" | "skipped"
 
 export interface AgentSnapshot {
@@ -66,5 +66,5 @@ export type ChatChunk =
   | { t: number; kind: "tool-result"; id?: string; name?: string; output?: string; isError?: boolean }
   | { t: number; kind: "status"; state: "running" | "done" | "failed"; error?: string; cached?: boolean }
 
-export const isTerminalRun = (s: RunStatus): boolean => s === "completed" || s === "failed" || s === "interrupted"
+export const isTerminalRun = (s: RunStatus): boolean => s === "completed" || s === "failed" || s === "interrupted" || s === "stale"
 export const isTerminalAgent = (s: AgentState): boolean => s === "done" || s === "failed" || s === "skipped"

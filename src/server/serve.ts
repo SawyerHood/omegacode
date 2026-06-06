@@ -2,7 +2,7 @@
 // state from the runs directory (events.jsonl / result.json) into JSON + an SSE stream,
 // and serves a tiny no-build SPA. node:http only; no extra deps.
 
-import { createReadStream, existsSync } from "node:fs"
+import { createReadStream, existsSync, statSync } from "node:fs"
 import { open, readFile, readdir, stat, watch } from "node:fs/promises"
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http"
 import { basename, dirname, extname, join, normalize, sep } from "node:path"
@@ -80,7 +80,10 @@ type AgentSnapshot = {
   t: number
 }
 
-type RunStatus = "started" | "completed" | "failed" | "interrupted" | "unknown"
+type RunStatus = "started" | "completed" | "failed" | "interrupted" | "unknown" | "stale"
+
+/** A "started" run whose heartbeat is older than this is treated as dead (deadman switch). */
+const STALE_MS = 20_000
 
 interface PhaseSnapshot {
   index: number
@@ -189,6 +192,18 @@ function foldSnapshot(runId: string, events: WorkflowEvent[]): RunSnapshot {
   for (const p of phases) p.agents.sort((a, b) => a.index - b.index)
 
   const name = workflowFile ? basename(workflowFile).replace(/\.workflow\.[cm]?[jt]s$/i, "").replace(/\.[cm]?[jt]s$/i, "") : undefined
+
+  // Deadman switch: a run still marked "started" whose heartbeat has gone stale is dead
+  // (its process was SIGKILLed / crashed / the terminal closed before a terminal event).
+  if (status === "started") {
+    let lastBeat = startedAt ?? 0
+    try {
+      lastBeat = Math.max(lastBeat, statSync(join(runsDir(), runId, ".heartbeat")).mtimeMs)
+    } catch {
+      // no heartbeat file — fall back to startedAt
+    }
+    if (lastBeat > 0 && Date.now() - lastBeat > STALE_MS) status = "stale"
+  }
 
   return { runId, status, name, workflowFile, error, startedAt, endedAt, phases, agents, logs }
 }
