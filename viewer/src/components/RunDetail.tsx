@@ -67,20 +67,38 @@ function PhaseGroup({
   onPick: (i: number) => void
 }) {
   const done = phase.agents.filter((a) => isTerminalAgent(a.state)).length
+  const roll = rollup(phase.agents)
+  const hasError = phase.agents.some((a) => a.state === "failed")
+  const containsActive = activeIndex != null && phase.agents.some((a) => a.index === activeIndex)
+  // Auto-collapse a phase once it completes cleanly; a manual toggle overrides, and a
+  // phase that holds the open agent is always shown.
+  const autoCollapsed = roll === "done" && !hasError
+  const [userOpen, setUserOpen] = useState<boolean | null>(null)
+  const open = containsActive ? true : (userOpen ?? !autoCollapsed)
+
   return (
     <div className="overflow-hidden rounded-lg border border-border bg-card/40">
-      <div className="flex items-center gap-2 border-b border-border/60 bg-surface-raised px-3 py-1.5">
+      <button
+        onClick={() => setUserOpen(!open)}
+        className={cn(
+          "flex w-full items-center gap-2 bg-surface-raised px-3 py-1.5 text-left transition-colors hover:bg-state-hover",
+          open && "border-b border-border/60",
+        )}
+      >
+        <span className={cn("text-[10px] text-muted-foreground transition-transform", !open && "-rotate-90")}>▾</span>
         <span className="text-sm font-semibold">{phase.title}</span>
         <span className="ml-auto flex items-center gap-2 font-mono text-[11px] text-subtle-foreground">
-          <StatusGlyph state={rollup(phase.agents)} />
+          <StatusGlyph state={roll} />
           {done}/{phase.agents.length}
         </span>
-      </div>
-      <div className="flex flex-col gap-0.5 p-1.5">
-        {phase.agents.map((a) => (
-          <AgentRow key={a.index} agent={a} active={a.index === activeIndex} onClick={() => onPick(a.index)} />
-        ))}
-      </div>
+      </button>
+      {open && (
+        <div className="flex flex-col gap-0.5 p-1.5">
+          {phase.agents.map((a) => (
+            <AgentRow key={a.index} agent={a} active={a.index === activeIndex} onClick={() => onPick(a.index)} />
+          ))}
+        </div>
+      )}
     </div>
   )
 }

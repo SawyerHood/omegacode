@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="agent-workflows app icon">
+  <rect width="512" height="512" rx="108" fill="#071012"/>
+  <path d="M164 180h72c22 0 40 18 40 40v72c0 22 18 40 40 40h32" fill="none" stroke="#37e6ff" stroke-width="42" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M164 332h72c22 0 40-18 40-40v-72c0-22 18-40 40-40h32" fill="none" stroke="#f4fbff" stroke-width="42" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="148" cy="180" r="42" fill="#37e6ff"/>
+  <circle cx="148" cy="332" r="42" fill="#f4fbff"/>
+  <circle cx="364" cy="180" r="42" fill="#37e6ff"/>
+  <circle cx="364" cy="332" r="42" fill="#f4fbff"/>
+  <circle cx="256" cy="256" r="54" fill="#071012" stroke="#eaff74" stroke-width="34"/>
+  <circle cx="256" cy="256" r="18" fill="#eaff74"/>
+</svg>
