@@ -210,4 +210,13 @@ omegacode doctor                              Check codex/claude availability + 
 omegacode install-skill [--claude] [--agents] Install this skill into agent skill dirs
 ```
 
-`--fake` runs with a fake worker (no real agents) for a fast smoke test; `--json` prints `{runId, status, result, error}`. The viewer (`serve` / `run --open`) reads `~/.omegacode/runs` and shows a run list, a live phase/agent tree, and a per-agent chat-feed drilldown; it streams via SSE and never executes anything.
+`--fake` runs with a fake worker (no real agents) for a fast smoke test; `--json` prints `{runId, status, url, result, error}` (and still starts the viewer). The viewer (`serve` / `run --open`, and auto-started by `run`) reads `~/.omegacode/runs` and shows a run list, a live phase/agent tree, and a per-agent chat-feed drilldown; it streams via SSE and never executes anything.
+
+## Running a workflow for a user (from an agent)
+
+When you (an agent such as Claude Code or Codex) run a workflow on a user's behalf, do two things:
+
+- **Background it; don't block your turn.** A workflow can run for many minutes (it spawns many agents), so launch `omegacode run …` in the background (your background-shell / detached process) and poll or await it for the result — don't run it in the foreground and block.
+- **Link the viewer so the user can track progress.** The moment a run starts it prints `view: http://127.0.0.1:4123/#/run/<id>` (and `--json` returns the same in the `url` field). Surface that URL to the user as a clickable link *immediately* — before the run finishes — so they can watch live: the phase tree and per-agent chat feed stream in real time. Then check back when the run completes and report the result.
+
+The viewer auto-starts on `run` (reused if already up) and idle-shuts-down once no run is active and no one is watching, so there's nothing to clean up.
