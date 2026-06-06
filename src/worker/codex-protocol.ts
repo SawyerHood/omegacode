@@ -152,6 +152,8 @@ export function toCodexApprovalPolicy(sandbox: Sandbox, approval: Approval): Cod
 export function toCodexEffort(effort: Effort | undefined): CodexReasoningEffort | undefined {
   if (!effort) return undefined
   switch (effort) {
+    case "minimal":
+      return "minimal"
     case "low":
       return "low"
     case "medium":
@@ -159,6 +161,9 @@ export function toCodexEffort(effort: Effort | undefined): CodexReasoningEffort 
     case "high":
       return "high"
     case "xhigh":
+      return "xhigh"
+    case "max":
+      // codex has no "max"; map to its top supported tier.
       return "xhigh"
   }
 }

@@ -57,8 +57,10 @@ Agents are told their final text IS the return value (not a human-facing message
 Every agent() runs under a provider/model. **By default, do NOT set `provider` or `model` per agent** — each agent inherits the provider/model the workflow is being run with (`--provider` / `--model`, default `codex`), which is almost always what you want. Most workflows (including the canonical example and the patterns above) omit them entirely. Pin them only when the user explicitly asks for a specific provider/model, or you're confident a particular step needs a different one. `agent-workflows doctor` shows which providers are installed/authed.
 
 The two providers:
-- **codex** (OpenAI, gpt-5.x) — the default. `opts.effort` (`"low" | "medium" | "high"`) tunes reasoning depth. Requires the `codex` CLI authenticated (ChatGPT login); its built-in tools (incl. hosted image generation) come from that auth, and it ignores `OPENAI_API_KEY`. Native structured output via a free-form working turn then a schema-constrained extraction turn.
-- **claude-code** (Anthropic) — via the Claude Agent SDK; requires the `claude` CLI / SDK available. Structured output is delivered on the final result only (intermediate messages stay free-form).
+- **codex** (OpenAI, gpt-5.x) — the default. `opts.effort` tunes reasoning depth: `"minimal" | "low" | "medium" | "high" | "xhigh"`. Requires the `codex` CLI authenticated (ChatGPT login); its built-in tools (incl. hosted image generation) come from that auth, and it ignores `OPENAI_API_KEY`. Native structured output via a free-form working turn then a schema-constrained extraction turn.
+- **claude-code** (Anthropic) — via the Claude Agent SDK; requires the `claude` CLI / SDK available. `opts.effort` accepts `"low" | "medium" | "high" | "xhigh" | "max"` (`max` is Opus-tier; the model silently downgrades unsupported levels). Structured output is delivered on the final result only (intermediate messages stay free-form).
+
+(`opts.effort` is a single union — `"minimal" | "low" | "medium" | "high" | "xhigh" | "max"` — and each worker maps to its nearest supported level: `minimal`→`low` on claude, `max`→`xhigh` on codex.)
 
 Both honor `sandbox` (read-only by default) and `cwd`; `worktree: true` isolates parallel file edits regardless of provider.
 

@@ -5,7 +5,9 @@ export type ProviderId = "codex" | "claude-code"
 /** read-only: no writes; workspace-write: write within cwd; danger-full-access: unrestricted. */
 export type Sandbox = "read-only" | "workspace-write" | "danger-full-access"
 
-export type Effort = "low" | "medium" | "high" | "xhigh"
+// Union of both providers' reasoning-effort levels. codex: none/minimal/low/medium/high/xhigh;
+// claude-code: low/medium/high/xhigh/max. Each worker maps to its nearest supported value.
+export type Effort = "minimal" | "low" | "medium" | "high" | "xhigh" | "max"
 
 export type Approval = "never" | "on-request"
 

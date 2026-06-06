@@ -38,6 +38,8 @@ export class ClaudeWorker implements Worker {
         return Promise.resolve({ behavior: "allow", updatedInput: input })
       },
     }
+    // codex-only "minimal" maps to the SDK's lowest; the rest match the SDK effort levels.
+    if (spec.effort) options.effort = spec.effort === "minimal" ? "low" : spec.effort
     if (spec.schema) options.outputFormat = toClaudeOutputFormat(spec.schema)
     if (spec.instructions) options.systemPrompt = { type: "preset", preset: "claude_code", append: spec.instructions }
     if (this.opts.pathToClaudeCodeExecutable) options.pathToClaudeCodeExecutable = this.opts.pathToClaudeCodeExecutable
