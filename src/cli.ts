@@ -1,6 +1,8 @@
 #!/usr/bin/env node
-import { existsSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs"
-import { join, resolve } from "node:path"
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs"
+import { homedir } from "node:os"
+import { dirname, join, resolve } from "node:path"
+import { fileURLToPath } from "node:url"
 import { runWorkflow, type RunOverrides } from "./runtime/run.js"
 import { parseWorkflow } from "./runtime/sandbox.js"
 import { dataRoot, Journal } from "./runtime/journal.js"
@@ -51,6 +53,8 @@ async function main(): Promise<void> {
       return cmdValidate(flags)
     case "doctor":
       return cmdDoctor()
+    case "install-skill":
+      return cmdInstallSkill(flags)
     case undefined:
     case "help":
     case "--help":
@@ -196,17 +200,58 @@ async function cmdDoctor(): Promise<void> {
   console.log(`  data dir     : ${dataRoot()}`)
 }
 
+async function cmdInstallSkill(flags: Flags): Promise<void> {
+  // The bundled skill lives at <cli dir>/../skill/SKILL.md — true both from source
+  // (src/cli.ts → repo/skill) and from the build (dist/cli.js → package/skill).
+  const here = dirname(fileURLToPath(import.meta.url))
+  const src = join(here, "..", "skill", "SKILL.md")
+  if (!existsSync(src)) {
+    console.error(`skill source not found at ${src}`)
+    process.exitCode = 1
+    return
+  }
+  const body = readFileSync(src, "utf8")
+  const wantClaude = flags.claude === true
+  const wantAgents = flags.agents === true
+  const both = !wantClaude && !wantAgents // default: install to both
+  const targets: string[] = []
+  if (both || wantClaude) targets.push(join(homedir(), ".claude", "skills"))
+  if (both || wantAgents) targets.push(join(homedir(), ".agents", "skills"))
+  for (const base of targets) {
+    const dest = join(base, "agent-workflows")
+    mkdirSync(dest, { recursive: true })
+    writeFileSync(join(dest, "SKILL.md"), body)
+    console.log(`installed skill → ${join(dest, "SKILL.md")}`)
+  }
+}
+
 function printHelp(): void {
-  console.log(`agent-workflows — run JS workflows that orchestrate Codex and Claude Code agents
+  console.log(`agent-workflows — run JS workflow files that orchestrate Codex and Claude Code agents
+
+A workflow is a .js file: \`export const meta = {...}\` then a body using the injected
+DSL — agent() / parallel() / pipeline() / phase() / log() / now() / random() / budget / args.
+Each agent() spawns a real Codex (gpt-5.x) or Claude Code agent; you pick the provider per call.
 
 Usage:
-  agent-workflows run <file.workflow.js> [--args <json>] [--provider codex|claude-code]
-                                         [--model m] [--sandbox s] [--cwd dir]
-                                         [--concurrency N] [--resume <runId>] [--fake] [--json]
-  agent-workflows validate <file.workflow.js>
-  agent-workflows doctor
+  agent-workflows run <file.workflow.js> [options]   Run a workflow
+      --args '<json>' | --args-file <f>    input exposed as the \`args\` global
+      --provider codex|claude-code         default provider (per-agent opts override)
+      --model <m>  --effort <e>  --sandbox read-only|workspace-write|danger-full-access
+      --cwd <dir>  --concurrency <N>       working dir; max concurrent agents (default 8)
+      --budget <N>                         output-token ceiling (enables budget.*)
+      --resume <runId>                     replay unchanged prefix, re-run the rest
+      --fake                               run with a fake worker (no real agents)
+      --json                               print {runId,status,result,error} as JSON
+      --open                               open the live viewer to this run
 
-Other commands (serve, runs, tail, list) are added by the viewer/CLI fan-out.`)
+  agent-workflows serve [--port 4123] [--host h]      Live read-only web viewer of all runs
+  agent-workflows runs [--prune --keep <N>]           List runs (or prune old ones)
+  agent-workflows validate <file.workflow.js>         Parse + check meta without running
+  agent-workflows doctor                              Check codex/claude availability + data dir
+  agent-workflows install-skill [--claude] [--agents] Install the authoring skill into agent skill dirs
+
+Runs persist to ~/.agent-workflows/runs/<id>/. Full authoring guide: the agent-workflows skill
+(\`agent-workflows install-skill\`) or skill/SKILL.md.`)
 }
 
 main().catch((err) => {
