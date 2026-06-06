@@ -32,7 +32,7 @@ export function RunList() {
           >
             <div className="flex items-center gap-1.5">
               <span className="truncate text-sm font-medium">{r.name ?? r.runId}</span>
-              <StatusGlyph state={r.status} className="ml-auto shrink-0" />
+              <StatusGlyph state={r.status} quiet className="ml-auto shrink-0" />
             </div>
             <div className="font-mono text-[11px] text-subtle-foreground">
               {r.agents} {r.agents === 1 ? "agent" : "agents"} · {timeAgo(r.startedAt) || "—"}

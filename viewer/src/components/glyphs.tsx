@@ -7,11 +7,11 @@ import type { AgentState, ProviderId, RunStatus } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
 /**
- * Status glyph — quiet by design: success shows NOTHING (returns null), only states that
- * need attention render. Running = spinning dashed circle (bb's sidebar idiom), failed = red
- * X, queued = a dim static dashed circle.
+ * Status glyph: spinning dashed circle for in-progress (bb's sidebar idiom), red X for failed,
+ * dim dashed circle for queued, green check for done. Pass `quiet` to suppress the done check
+ * (used by the run list, where a check per row would be a sea — phases collapse, so they show it).
  */
-export function StatusGlyph({ state, className }: { state: AgentState | RunStatus; className?: string }) {
+export function StatusGlyph({ state, className, quiet }: { state: AgentState | RunStatus; className?: string; quiet?: boolean }) {
   if (state === "running" || state === "started") {
     return <Icon name="Spinner" className={cn("size-3.5 animate-spin text-muted-foreground", className)} aria-label="in progress" />
   }
@@ -21,8 +21,10 @@ export function StatusGlyph({ state, className }: { state: AgentState | RunStatu
   if (state === "queued") {
     return <Icon name="Spinner" className={cn("size-3.5 text-muted-foreground/35", className)} aria-label="queued" />
   }
-  // done / completed / skipped — success is silent.
-  return null
+  if (state === "skipped") return null
+  // done / completed
+  if (quiet) return null
+  return <Icon name="CircleCheck" className={cn("size-3.5 text-success", className)} aria-label="done" />
 }
 
 /** Provider brand mark (OpenAI for codex, Anthropic/Claude for claude-code). */
