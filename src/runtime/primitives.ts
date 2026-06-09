@@ -41,6 +41,7 @@ export class AgentFailedError extends WorkflowError {}
 
 /** Valid values for the enum-typed spec fields, validated at spec resolution (H14). */
 export const SPEC_ENUMS = {
+  provider: ["codex", "claude-code", "opencode", "pi"],
   sandbox: ["read-only", "workspace-write", "danger-full-access"],
   effort: ["none", "minimal", "low", "medium", "high", "xhigh", "max"],
   approval: ["never", "on-request"],
@@ -221,6 +222,7 @@ export class Runtime {
       maxTurns: opts?.maxTurns,
     }
     // Validate the RESOLVED values so both per-call opts and run defaults are covered (H14).
+    checkSpecEnum("provider", spec.provider)
     checkSpecEnum("sandbox", spec.sandbox)
     checkSpecEnum("effort", spec.effort)
     checkSpecEnum("approval", spec.approval)

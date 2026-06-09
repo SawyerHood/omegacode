@@ -7,6 +7,8 @@ import { DefaultWorkerFactory } from "../src/worker/factory.ts"
 import { FakeWorker } from "../src/worker/fake.ts"
 import { ClaudeWorker, bashWriteOutsideCwd, checkTool, isReadOnlyBash, usageFromResult } from "../src/worker/claude.ts"
 import { CodexWorker } from "../src/worker/codex.ts"
+import { OpenCodeWorker } from "../src/worker/opencode.ts"
+import { PiWorker } from "../src/worker/pi.ts"
 import { AgentError, AgentInterrupted, type WorkerContext } from "../src/worker/index.ts"
 import type { AgentSpec, ProviderId } from "../src/dsl/types.ts"
 
@@ -22,6 +24,20 @@ test("returns a ClaudeWorker for 'claude-code'", () => {
   const w = f.get("claude-code")
   assert.ok(w instanceof ClaudeWorker)
   assert.equal(w.id, "claude-code")
+})
+
+test("returns an OpenCodeWorker for 'opencode'", () => {
+  const f = new DefaultWorkerFactory()
+  const w = f.get("opencode")
+  assert.ok(w instanceof OpenCodeWorker)
+  assert.equal(w.id, "opencode")
+})
+
+test("returns a PiWorker for 'pi'", () => {
+  const f = new DefaultWorkerFactory()
+  const w = f.get("pi")
+  assert.ok(w instanceof PiWorker)
+  assert.equal(w.id, "pi")
 })
 
 test("M5: unknown provider id throws instead of silently returning ClaudeWorker", () => {
@@ -41,6 +57,8 @@ test("fake:true routes EVERY provider id to the FakeWorker", () => {
   const f = new DefaultWorkerFactory({ fake: true })
   assert.ok(f.get("codex") instanceof FakeWorker)
   assert.ok(f.get("claude-code") instanceof FakeWorker)
+  assert.ok(f.get("opencode") instanceof FakeWorker)
+  assert.ok(f.get("pi") instanceof FakeWorker)
   // even an otherwise-unknown id is faked (smoke-test convenience)
   assert.ok(f.get("anything" as ProviderId) instanceof FakeWorker)
 })
@@ -49,7 +67,10 @@ test("caches one worker per provider id", () => {
   const f = new DefaultWorkerFactory()
   assert.equal(f.get("codex"), f.get("codex"))
   assert.equal(f.get("claude-code"), f.get("claude-code"))
+  assert.equal(f.get("opencode"), f.get("opencode"))
+  assert.equal(f.get("pi"), f.get("pi"))
   assert.notEqual(f.get("codex") as unknown, f.get("claude-code") as unknown)
+  assert.notEqual(f.get("opencode") as unknown, f.get("pi") as unknown)
 })
 
 test("L5: claudeModel is consumed by the ClaudeWorker", () => {
@@ -72,6 +93,22 @@ test("codexBin is consumed by the CodexWorker", () => {
   const f = new DefaultWorkerFactory({ codexBin: "/opt/codex" })
   const w = f.get("codex")
   assert.ok(w instanceof CodexWorker)
+})
+
+test("opencodeBin is consumed by the OpenCodeWorker", () => {
+  const f = new DefaultWorkerFactory({ opencodeBin: "/opt/opencode" })
+  const w = f.get("opencode") as OpenCodeWorker
+  assert.equal((w as unknown as { opts: { bin?: string } }).opts.bin, "/opt/opencode")
+})
+
+test("pi options are consumed by the PiWorker", () => {
+  const f = new DefaultWorkerFactory({ piBin: "/opt/pi", piProvider: "anthropic", piModel: "m" })
+  const w = f.get("pi") as PiWorker
+  assert.deepEqual((w as unknown as { opts: { bin?: string; provider?: string; model?: string } }).opts, {
+    bin: "/opt/pi",
+    provider: "anthropic",
+    model: "m",
+  })
 })
 
 test("shutdownAll clears the cache and is safe to call repeatedly", async () => {

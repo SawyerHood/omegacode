@@ -189,6 +189,18 @@ describe("ambient inlined types stay in sync with dsl/types.ts (M31 drift guard)
   })
 })
 
+describe("provider docs stay in sync with dsl/types.ts", () => {
+  const providerIds = [...read("src/dsl/types.ts").match(/export type ProviderId\s*=\s*([^\n]+)/)![1].matchAll(/"([^"]+)"/g)].map((m) => m[1])
+  const docs = `${read("README.md")}\n${read("skill/SKILL.md")}`
+  const escapeRegExp = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+
+  for (const provider of providerIds) {
+    test(`documents ${provider}`, () => {
+      assert.match(docs, new RegExp(`(^|[^A-Za-z0-9-])${escapeRegExp(provider)}([^A-Za-z0-9-]|$)`))
+    })
+  }
+})
+
 describe("index.ts exports the public types (M31)", () => {
   const index = read("src/index.ts")
   for (const t of [

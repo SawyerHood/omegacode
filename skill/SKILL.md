@@ -1,13 +1,13 @@
 ---
 name: omegacode
-description: Author and run multi-agent workflows with the `omegacode` CLI — JavaScript files that orchestrate Codex (gpt-5.x) and Claude Code agents deterministically via agent()/parallel()/pipeline()/phase(). Use when a task is big enough to decompose and run in parallel, when you want independent perspectives and adversarial checks before committing, or when the work is too large for one context (broad audits, migrations, multi-source research, exhaustive reviews). Covers the file shape, the DSL, mixing providers, structured output, worktree isolation, determinism, resume, the live viewer, and every CLI command.
+description: Author and run multi-agent workflows with the `omegacode` CLI — JavaScript files that orchestrate Codex (gpt-5.x), Claude Code, OpenCode, and Pi agents deterministically via agent()/parallel()/pipeline()/phase(). Use when a task is big enough to decompose and run in parallel, when you want independent perspectives and adversarial checks before committing, or when the work is too large for one context (broad audits, migrations, multi-source research, exhaustive reviews). Covers the file shape, the DSL, mixing providers, structured output, worktree isolation, determinism, resume, the live viewer, and every CLI command.
 metadata:
   type: reference
 ---
 
 # omegacode
 
-Run a workflow file that orchestrates multiple agents deterministically. `omegacode run <file.workflow.js>` executes the file; it persists to `~/.omegacode/runs/<id>/` and prints a runId. Use `omegacode serve` (or `run --open`) to watch live progress. Each `agent()` call spawns a real **Codex** (gpt-5.x) or **Claude Code** agent — you pick the provider per call.
+Run a workflow file that orchestrates multiple agents deterministically. `omegacode run <file.workflow.js>` executes the file; it persists to `~/.omegacode/runs/<id>/` and prints a runId. Use `omegacode serve` (or `run --open`) to watch live progress. Each `agent()` call spawns a real **Codex** (gpt-5.x), **Claude Code**, **OpenCode**, or **Pi** agent — you pick the provider per call.
 
 A workflow structures work across many agents — to be comprehensive (decompose and cover in parallel), to be confident (independent perspectives and adversarial checks before committing), or to take on scale one context can't hold (migrations, audits, broad sweeps). The file is where you encode that structure: what fans out, what verifies, what synthesizes.
 
@@ -41,7 +41,7 @@ const flaky = await agent('grep CI logs for retry markers', { schema: FLAKY_SCHE
 The `meta` object must be a PURE LITERAL — no variables, function calls, spreads, or template interpolation. Required fields: `name`, `description`. Optional: `phases`. Use the SAME phase titles in meta.phases as in phase() calls — titles are matched exactly; a phase() call with no matching meta entry just gets its own progress group.
 
 Script body hooks:
-- agent(prompt: string, opts?: {provider?: 'codex' | 'claude-code', model?: string, effort?: string, schema?: object, label?: string, sandbox?: 'read-only' | 'workspace-write' | 'danger-full-access', cwd?: string, instructions?: string, maxTurns?: number, worktree?: boolean, key?: string}): Promise<any> — spawn an agent. Without schema, returns its final text as a string. With schema (a JSON Schema), the agent is forced to return JSON matching it and agent() returns the validated object — no parsing needed. Returns null if the user skips the agent mid-run (filter with .filter(Boolean)). opts.provider / opts.model: **default to omitting both** — the agent inherits the provider and model the workflow is being run with (set by `--provider`/`--model`, default `codex`), which is almost always correct. Only set them when the user explicitly asks for a specific provider/model, or you're highly confident a particular step needs a different one. opts.label overrides the display label. opts.sandbox defaults to `read-only`; use `workspace-write` (write to cwd + network) only when the agent must write. opts.worktree: true runs the agent in a fresh git worktree — EXPENSIVE (setup + disk per agent), use ONLY when agents mutate files in parallel and would otherwise conflict; the worktree is auto-removed if unchanged. opts.key is a stable resume pin that survives prompt-wording/reordering edits.
+- agent(prompt: string, opts?: {provider?: 'codex' | 'claude-code' | 'opencode' | 'pi', model?: string, effort?: string, schema?: object, label?: string, sandbox?: 'read-only' | 'workspace-write' | 'danger-full-access', cwd?: string, instructions?: string, maxTurns?: number, worktree?: boolean, key?: string}): Promise<any> — spawn an agent. Without schema, returns its final text as a string. With schema (a JSON Schema), the agent is forced to return JSON matching it and agent() returns the validated object — no parsing needed. Returns null if the user skips the agent mid-run (filter with .filter(Boolean)). opts.provider / opts.model: **default to omitting both** — the agent inherits the provider and model the workflow is being run with (set by `--provider`/`--model`, default `codex`), which is almost always correct. Only set them when the user explicitly asks for a specific provider/model, or you're highly confident a particular step needs a different one. opts.label overrides the display label. opts.sandbox defaults to `read-only`; use `workspace-write` (write to cwd + network) only when the agent must write. opts.worktree: true runs the agent in a fresh git worktree — EXPENSIVE (setup + disk per agent), use ONLY when agents mutate files in parallel and would otherwise conflict; the worktree is auto-removed if unchanged. opts.key is a stable resume pin that survives prompt-wording/reordering edits.
 - pipeline(items, stage1, stage2, ...): Promise<any[]> — run each item through all stages independently, NO barrier between stages. Item A can be in stage 3 while item B is still in stage 1. This is the DEFAULT for multi-stage work. Wall-clock = slowest single-item chain, not sum-of-slowest-per-stage. Every stage callback receives (prevResult, originalItem, index) — use originalItem/index in later stages to label work without threading context through stage 1's return value. A stage that throws drops that item to `null` and skips its remaining stages.
 - parallel(thunks: Array<() => Promise<any>>): Promise<any[]> — run tasks concurrently. This is a BARRIER: awaits all thunks before returning. A thunk that throws (or whose agent errors) resolves to `null` in the result array — the call itself never rejects, so `.filter(Boolean)` before using the results. Use ONLY when you genuinely need all results together.
 - log(message: string): void — emit a progress message to the user (shown as a narrator line above the progress tree)
@@ -52,17 +52,19 @@ Script body hooks:
 
 Agents are told their final text IS the return value (not a human-facing message), so they return raw data. For structured output, use the schema option — validation happens at the worker layer and the agent retries once on a mismatch.
 
-## Providers — codex vs claude-code
+## Providers
 
 Every agent() runs under a provider/model. **By default, do NOT set `provider` or `model` per agent** — each agent inherits the provider/model the workflow is being run with (`--provider` / `--model`, default `codex`), which is almost always what you want. Most workflows (including the canonical example and the patterns above) omit them entirely. Pin them only when the user explicitly asks for a specific provider/model, or you're confident a particular step needs a different one. `omegacode doctor` shows which providers are installed/authed.
 
-The two providers:
+Providers:
 - **codex** (OpenAI, gpt-5.x) — the default. `opts.effort` tunes reasoning depth: `"minimal" | "low" | "medium" | "high" | "xhigh"`. Requires the `codex` CLI authenticated (ChatGPT login); its built-in tools (incl. hosted image generation) come from that auth, and it ignores `OPENAI_API_KEY`. Native structured output via a free-form working turn then a schema-constrained extraction turn.
 - **claude-code** (Anthropic) — via the Claude Agent SDK; requires the `claude` CLI / SDK available. `opts.effort` accepts `"low" | "medium" | "high" | "xhigh" | "max"` (`max` is Opus-tier; the model silently downgrades unsupported levels). Structured output is delivered on the final result only (intermediate messages stay free-form).
+- **opencode** — via `opencode run --format json`; requires the `opencode` CLI. `opts.model` must use OpenCode's `provider/model` form, so omegacode can pass through any model OpenCode supports. OpenCode is currently limited to `danger-full-access` in omegacode because its CLI does not expose a read-only mode omegacode can enforce.
+- **pi** — via `pi --mode json --print`; requires the `pi` CLI. `opts.model` is passed through to Pi, and `PI_PROVIDER` / `PI_MODEL` can set provider defaults for Pi runs. Pi is limited to read-only operation in omegacode with `read,grep,find,ls` tools and explicit workspace-root instructions.
 
-(`opts.effort` is a single union — `"minimal" | "low" | "medium" | "high" | "xhigh" | "max"` — and each worker maps to its nearest supported level: `minimal`→`low` on claude, `max`→`xhigh` on codex.)
+(`opts.effort` is a single union — `"none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max"` — and each worker maps to its nearest supported level: `minimal`→`low` on claude, `none`→`off` on Pi, `max`→`xhigh` on codex/Pi.)
 
-Both honor `sandbox` (read-only by default) and `cwd`; `worktree: true` isolates parallel file edits regardless of provider.
+Codex and Claude Code honor `sandbox` (read-only by default) and `cwd`; Pi only supports `read-only`; OpenCode only supports `danger-full-access` until omegacode can enforce a read-only OpenCode mode. `worktree: true` isolates parallel file edits regardless of provider.
 
 The default case — omit provider, so fan-out and synthesis run on whatever provider the workflow was invoked with:
 ```js
@@ -200,7 +202,7 @@ Every run has a runId (printed on completion). To resume after a script edit or 
 
 ```
 omegacode run <file.workflow.js | name> [--args '<json>' | --args-file <f>]
-                                       [--provider codex|claude-code] [--model m] [--effort e]
+                                       [--provider codex|claude-code|opencode|pi] [--model m] [--effort e]
                                        [--sandbox read-only|workspace-write|danger-full-access] [--cwd dir]
                                        [--concurrency N] [--budget N] [--resume <runId>] [--fake] [--json] [--open]
 omegacode serve [--port 4123] [--host h]      Live read-only web viewer of all runs
@@ -208,7 +210,7 @@ omegacode runs [--prune --keep <N>]           List runs (or prune old ones)
 omegacode workflows [--json]                  List saved/named workflows (project, user, builtin)
 omegacode save <file.workflow.js> [--project] [--force]   Save a workflow under its meta.name
 omegacode validate <file.workflow.js | name>  Parse + check meta without running
-omegacode doctor                              Check codex/claude availability + data dir
+omegacode doctor                              Check provider availability + data dir
 omegacode install-skill [--claude] [--agents] Install this skill into agent skill dirs
 ```
 
@@ -222,7 +224,7 @@ Six built-ins ship with the package. Two are ports of Claude Code's bundled work
 - **`deep-research`** — `omegacode run deep-research --args '"<question>"'`: scope → 5 parallel web searches → fetch/dedup top sources → 3-vote adversarial verification per claim → cited report.
 - **`code-review`** — `omegacode run code-review [--args '{"target": "...", "level": "high|xhigh|max"}']`: one finder per review angle, an independent verifier per finding (CONFIRMED/PLAUSIBLE/REFUTED), a gap-sweep at xhigh/max, ranked report.
 
-The other four are omegacode-original multi-provider workflows — designs where two models' decorrelated errors are the point:
+The other four are omegacode-original multi-provider workflows — designs where provider-diverse models' decorrelated errors are the point:
 - **`multi-provider-review`** — `omegacode run multi-provider-review [--args '{"target": "..."}']`: Codex and Claude each review the entire feature/branch independently (identical prompts, blind to each other), then a synthesis agent merges both — consensus findings ranked first, unique catches attributed, disagreements called out. Target defaults to the current branch vs its merge-base with the default branch.
 - **`bake-off`** — `omegacode run bake-off --args '"<task>"'`: both providers implement the same task in isolated worktrees (committed work only), blind A/B judges from both providers score the diffs, a tie-break settles splits, and the report names what to graft from the loser. Both branches are preserved.
 - **`provider-debate`** — `omegacode run provider-debate --args '"<question>"'` (or `'{"question": "...", "rounds": 2, "proposer": "codex"}'`): one provider proposes, the other attacks, N rounds of rebuttal, then a judge rules — recommendation, survived/conceded points, open questions.

@@ -31,6 +31,10 @@ export interface RunOverrides {
   cwd?: string
   concurrency?: number
   budget?: number | null
+  opencodeBin?: string
+  piBin?: string
+  piProvider?: string
+  piModel?: string
   /** Forwarded to the Claude worker when provider === "claude-code". */
   claudeModel?: string
   /** Path to the claude-code executable (forwarded to the Claude worker). */
@@ -108,6 +112,10 @@ export async function runWorkflow(opts: RunOptions): Promise<RunOutcome> {
   const factory = new DefaultWorkerFactory({
     fake: opts.fake,
     codexBin: process.env.CODEX_BIN,
+    opencodeBin: opts.overrides?.opencodeBin ?? process.env.OPENCODE_BIN,
+    piBin: opts.overrides?.piBin ?? process.env.PI_BIN,
+    piProvider: opts.overrides?.piProvider ?? process.env.PI_PROVIDER,
+    piModel: opts.overrides?.piModel ?? (defaults.provider === "pi" ? defaults.model : undefined) ?? process.env.PI_MODEL,
     // Claude-specific factory defaults (L5). Only forwarded when the provider is claude-code; a
     // per-call opts.model still overrides via AgentSpec.model.
     claudeModel: opts.overrides?.claudeModel ?? (defaults.provider === "claude-code" ? defaults.model : undefined),
@@ -189,11 +197,13 @@ function resolveDefaults(meta: { defaultProvider?: ProviderId; defaultModel?: st
   // unvalidated into every spec and fall off the worker policy switches (H14) — e.g. "readonly"
   // (typo for "read-only") becomes effectively writable. Fail here, like concurrency above.
   // resolveSpec re-checks the resolved per-call values, covering workflow-body opts too.
+  const provider = o.provider ?? meta.defaultProvider ?? DEFAULTS.provider
+  checkSpecEnum("provider", provider)
   const sandbox = o.sandbox ?? meta.defaultSandbox ?? DEFAULTS.sandbox
   checkSpecEnum("sandbox", sandbox)
   checkSpecEnum("effort", o.effort)
   return {
-    provider: o.provider ?? meta.defaultProvider ?? DEFAULTS.provider,
+    provider,
     model: o.model ?? meta.defaultModel,
     effort: o.effort,
     sandbox,

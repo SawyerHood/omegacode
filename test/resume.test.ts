@@ -506,6 +506,18 @@ return await agent("one")`,
   })
 })
 
+test("H14: an invalid meta.defaultProvider fails the run at startup", async () => {
+  await withHome(async (home) => {
+    const file = join(home, "wf.js")
+    writeFileSync(
+      file,
+      `export const meta = { name: "t", description: "d", defaultProvider: "open-code" }
+return await agent("one")`,
+    )
+    await assert.rejects(runFile(file), /invalid provider "open-code"/)
+  })
+})
+
 test("rec #4: a v1 journal (meta WITHOUT keyVersion) is rejected on resume", async () => {
   await withHome(async (home) => {
     const file = join(home, "wf.js")

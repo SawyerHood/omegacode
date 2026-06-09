@@ -7,7 +7,7 @@
 An **agent-agnostic implementation of Claude Code's Workflows**. omegacode runs JavaScript workflow
 files that orchestrate fleets of coding agents with a small deterministic DSL — `agent()` /
 `parallel()` / `pipeline()` / `phase()` — and the workers are pluggable: the same workflow can
-drive **Claude Code**, **Codex**, or both in a single run.
+drive **Claude Code**, **Codex**, **OpenCode**, **Pi**, or several providers in a single run.
 
 ## Install
 
@@ -20,8 +20,8 @@ omegacode install-skill
 `~/.claude/skills/` (Claude Code) and `~/.agents/skills/` (Codex and other agents). Pass
 `--claude` or `--agents` to install to just one.
 
-You'll need Node 20+ and at least one worker installed: `codex` (the default provider) and/or
-`claude`. Run `omegacode doctor` to check.
+You'll need Node 20+ and at least one worker installed: `codex` (the default provider),
+`claude`, `opencode`, or `pi`. Run `omegacode doctor` to check.
 
 ## Use it
 
@@ -52,8 +52,8 @@ return await pipeline(
 )
 ```
 
-Plain JavaScript, no imports — the DSL is injected. Each `agent()` spawns a real Codex or Claude
-Code agent; omit `provider` to inherit whatever the run was started with (`--provider`, default
+Plain JavaScript, no imports — the DSL is injected. Each `agent()` spawns a real provider-backed
+agent; omit `provider` to inherit whatever the run was started with (`--provider`, default
 `codex`), or pin it per call when you want cross-provider diversity.
 
 ## CLI
@@ -62,12 +62,18 @@ Code agent; omit `provider` to inherit whatever the run was started with (`--pro
 omegacode run <file.workflow.js | name>   # run a workflow (auto-starts the live viewer)
 omegacode serve                           # read-only dashboard over all runs
 omegacode run <name> --resume <runId>     # resume — only the changed suffix re-runs
-omegacode doctor                          # check codex/claude availability
+omegacode doctor                          # check provider availability
 omegacode guide                           # print the full authoring guide
 ```
 
+Providers are `codex`, `claude-code`, `opencode`, and `pi`. OpenCode models use
+`provider/model` names and currently require `danger-full-access` because omegacode cannot
+enforce OpenCode read-only mode itself. Pi runs in read-only mode with read/search tools only;
+`PI_PROVIDER` and `PI_MODEL` can provide its defaults, and `OPENCODE_BIN` / `PI_BIN` override
+binary paths.
+
 `run` also accepts saved workflow names. Six built-ins ship with the package:
-`deep-research`, `code-review`, and four multi-provider workflows that put the two
+`deep-research`, `code-review`, and four multi-provider workflows that put provider-diverse
 models' decorrelated errors to work — `multi-provider-review` (both review the same
 branch independently, then a synthesis merges both), `bake-off` (both implement the
 same task in isolated worktrees, blind cross-provider judges pick a winner),

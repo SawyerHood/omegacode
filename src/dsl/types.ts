@@ -1,12 +1,11 @@
 // Shared type contracts for the whole system. Everything compiles against these.
 
-export type ProviderId = "codex" | "claude-code"
+export type ProviderId = "codex" | "claude-code" | "opencode" | "pi"
 
 /** read-only: no writes; workspace-write: write within cwd; danger-full-access: unrestricted. */
 export type Sandbox = "read-only" | "workspace-write" | "danger-full-access"
 
-// Union of both providers' reasoning-effort levels. codex: none/minimal/low/medium/high/xhigh;
-// claude-code: low/medium/high/xhigh/max. Each worker maps to its nearest supported value.
+// Union of supported providers' reasoning-effort levels. Each worker maps to its nearest supported value.
 export type Effort = "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max"
 
 export type Approval = "never" | "on-request"

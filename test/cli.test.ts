@@ -5,7 +5,7 @@
 
 import { strict as assert } from "node:assert"
 import { execFileSync, spawn } from "node:child_process"
-import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { get as httpGet } from "node:http"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -258,8 +258,16 @@ describe("CLI end-to-end (--fake)", () => {
   test("invalid --provider exits 1 with a friendly message, not a stack (M5)", async () => {
     const r = await runCli(["run", wf, "--provider", "claude", "--fake", "--no-serve"], { OMEGACODE_HOME: home })
     assert.equal(r.code, 1)
-    assert.match(r.stderr, /--provider must be one of/)
+    assert.match(r.stderr, /--provider must be one of codex, claude-code, opencode, pi/)
     assert.doesNotMatch(r.stderr, /at \w+ \(/) // no stack frames
+  })
+
+  test("--provider accepts opencode and pi under --fake", async () => {
+    for (const provider of ["opencode", "pi"]) {
+      const r = await runCli(["run", wf, "--provider", provider, "--fake", "--no-serve", "--json"], { OMEGACODE_HOME: home })
+      assert.equal(r.code, 0, `provider=${provider} stderr=${r.stderr}`)
+      assert.equal(JSON.parse(r.stdout).status, "completed")
+    }
   })
 
   test("invalid --sandbox (typo for read-only) is rejected (H14)", async () => {
@@ -613,6 +621,31 @@ describe("CLI misc commands", () => {
     const r = await runCli(["run"])
     assert.equal(r.code, 1)
     assert.match(r.stderr, /usage: omegacode run/)
+  })
+
+  test("doctor checks opencode and pi using provider binary env vars", async () => {
+    const home = mkdtempSync(join(tmpdir(), "omegacode-doctor-"))
+    const writeBin = (name: string, output: string): string => {
+      const bin = join(home, name)
+      writeFileSync(bin, `#!/usr/bin/env node\nconsole.log(${JSON.stringify(output)})\n`)
+      chmodSync(bin, 0o755)
+      return bin
+    }
+
+    try {
+      const r = await runCli(["doctor"], {
+        OMEGACODE_HOME: home,
+        CODEX_BIN: writeBin("codex", "codex 0.0.0-test"),
+        OPENCODE_BIN: writeBin("opencode", "opencode 1.2.3-test"),
+        PI_BIN: writeBin("pi", "pi 4.5.6-test"),
+      })
+      assert.equal(r.code, 0)
+      assert.match(r.stdout, /codex\s+: codex 0\.0\.0-test/)
+      assert.match(r.stdout, /opencode\s+: opencode 1\.2\.3-test/)
+      assert.match(r.stdout, /pi\s+: pi 4\.5\.6-test/)
+    } finally {
+      rmSync(home, { recursive: true, force: true })
+    }
   })
 })
 

@@ -131,7 +131,7 @@ function numberFlag(flags: Flags, name: string): number | undefined {
   return n
 }
 
-const PROVIDERS: ProviderId[] = ["codex", "claude-code"]
+const PROVIDERS: ProviderId[] = ["codex", "claude-code", "opencode", "pi"]
 const SANDBOXES: Sandbox[] = ["read-only", "workspace-write", "danger-full-access"]
 const EFFORTS: Effort[] = ["none", "minimal", "low", "medium", "high", "xhigh", "max"]
 
@@ -378,7 +378,7 @@ function dirSize(dir: string): number {
 async function cmdRun(flags: Flags): Promise<void> {
   const file = (flags._ as string[])[1]
   if (!file) {
-    console.error("usage: omegacode run <file.workflow.js | name> [--args <json>] [--provider codex|claude-code] [--fake] [--json]")
+    console.error("usage: omegacode run <file.workflow.js | name> [--args <json>] [--provider codex|claude-code|opencode|pi] [--fake] [--json]")
     process.exitCode = 1
     return
   }
@@ -553,8 +553,10 @@ async function cmdDoctor(): Promise<void> {
   }
   console.log("omegacode doctor")
   console.log(`  fake worker  : ok`)
-  console.log(`  codex        : ${check("codex", ["--version"])}`)
+  console.log(`  codex        : ${check(process.env.CODEX_BIN ?? "codex", ["--version"])}`)
   console.log(`  claude-code  : ${check("claude", ["--version"])}`)
+  console.log(`  opencode     : ${check(process.env.OPENCODE_BIN ?? "opencode", ["--version"])}`)
+  console.log(`  pi           : ${check(process.env.PI_BIN ?? "pi", ["--version"])}`)
   console.log(`  data dir     : ${dataRoot()}`)
 }
 
@@ -598,16 +600,17 @@ async function cmdInstallSkill(flags: Flags): Promise<void> {
 }
 
 function printHelp(): void {
-  console.log(`omegacode — run JS workflow files that orchestrate Codex and Claude Code agents
+  console.log(`omegacode — run JS workflow files that orchestrate multiple agent providers
 
 A workflow is a .js file: \`export const meta = {...}\` then a body using the injected
 DSL — agent() / parallel() / pipeline() / phase() / log() / now() / random() / budget / args.
-Each agent() spawns a real Codex (gpt-5.x) or Claude Code agent; you pick the provider per call.
+Each agent() spawns a real provider-backed agent; you pick the provider per call.
 
 Usage:
   omegacode run <file.workflow.js | name> [options]   Run a workflow (by path or saved name)
       --args '<json>' | --args-file <f>    input exposed as the \`args\` global
-      --provider codex|claude-code         default provider (per-agent opts override)
+      --provider codex|claude-code|opencode|pi
+                                            default provider (per-agent opts override)
       --model <m>  --effort <e>  --sandbox read-only|workspace-write|danger-full-access
       --cwd <dir>  --concurrency <N>       working dir; max concurrent agents (default ${DEFAULTS.concurrency})
       --budget <N>                         output-token ceiling (enables budget.*)
@@ -620,12 +623,16 @@ Usage:
   By default \`run\` auto-starts the viewer (if not already up) and prints the run's URL
   (with --json the URL is in the JSON \`url\` field and the \`view:\` line is suppressed).
 
+Provider environment:
+  CODEX_BIN, OPENCODE_BIN, PI_BIN        override provider executable paths
+  PI_PROVIDER, PI_MODEL                  defaults for pi when not set per agent
+
   omegacode serve [--port 4123] [--host h] [--idle-shutdown]   Live read-only web viewer of all runs
   omegacode runs [--prune --keep <N>] [--prune-stale]   List runs (--prune old, --prune-stale dead)
   omegacode workflows [--json]                  List saved/named workflows (project, user, builtin)
   omegacode save <file.workflow.js> [--project] [--force]   Save a workflow under its meta.name
   omegacode validate <file.workflow.js | name>  Parse + check meta without running
-  omegacode doctor                              Check codex/claude availability + data dir
+  omegacode doctor                              Check provider availability + data dir
   omegacode guide                               Print the full authoring guide (the skill text)
   omegacode install-skill [--claude] [--agents] Install the authoring skill into agent skill dirs
 
