@@ -232,7 +232,7 @@ The other four are omegacode-original multi-provider workflows — designs where
 
 When you (an agent such as Claude Code or Codex) run a workflow on a user's behalf, do two things:
 
-- **Background it; don't block your turn.** A workflow can run for many minutes (it spawns many agents), so launch `omegacode run …` in the background (your background-shell / detached process) and poll or await it for the result — don't run it in the foreground and block.
+- **Background it (Claude Code) or block on it (Codex).** A workflow can run for many minutes (it spawns many agents). If you are **Claude Code**, launch `omegacode run …` in the background (your background-shell / detached process) and poll or await it for the result — don't run it in the foreground and block. If you are **Codex**, block on the run until it completes (run it in the foreground and wait for the result) unless the user specifies otherwise — Codex has no reliable background-shell to poll from, so blocking is the correct default.
 - **Link the viewer so the user can track progress.** The moment a run starts it prints `view: http://127.0.0.1:4123/#/run/<id>` (and `--json` returns the same in the `url` field). Surface that URL to the user as a clickable link *immediately* — before the run finishes — so they can watch live: the phase tree and per-agent chat feed stream in real time. Then check back when the run completes and report the result.
 
 The viewer auto-starts on `run` (reused if already up) and idle-shuts-down once no run is active and no one is watching, so there's nothing to clean up.
