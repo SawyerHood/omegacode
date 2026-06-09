@@ -108,7 +108,7 @@ function PhaseGroup({
   const open = userOpen ?? (containsActive ? true : !autoCollapsed)
 
   return (
-    <div className="overflow-hidden rounded-lg border border-border bg-card/40">
+    <div className="shrink-0 overflow-hidden rounded-lg border border-border bg-card/40">
       <button
         onClick={() => setUserOpen(!open)}
         className={cn(
@@ -186,7 +186,7 @@ export function RunDetail({ snap }: { snap: RunSnapshot | null }) {
           <PhaseGroup key={p.index} phase={p} runStatus={snap.status} activeIndex={activeIndex} onPick={pick} />
         ))}
         {ungrouped.length > 0 && (
-          <div className="flex flex-col gap-0.5 rounded-lg border border-border bg-card/40 p-1.5">
+          <div className="flex shrink-0 flex-col gap-0.5 rounded-lg border border-border bg-card/40 p-1.5">
             {ungrouped.map((a) => (
               <AgentRow key={a.index} agent={a} runStatus={snap.status} active={a.index === activeIndex} onClick={() => pick(a.index)} />
             ))}
