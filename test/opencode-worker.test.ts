@@ -217,6 +217,22 @@ test("ProviderAuthError classifies as provider_auth", async () => {
   })
 })
 
+test("'database is locked' exit is a RETRYABLE provider_busy (concurrent one-shot contention)", async () => {
+  const h = harness([
+    versionOk,
+    (p) => {
+      p.pushStderr("Error: Unexpected error, check log file\ndatabase is locked\n")
+      p.end(1)
+    },
+  ])
+  await assert.rejects(h.worker.runAgent(spec(), ctx()), (err: unknown) => {
+    assert.ok(err instanceof AgentError)
+    assert.equal(err.code, "provider_busy")
+    assert.equal(err.retryable, true)
+    return true
+  })
+})
+
 test("exit 0 with no assistant text is no_result; nonzero exit is provider_exit with stderr tail", async () => {
   const h = harness([versionOk, (p) => p.end(0)])
   await assert.rejects(h.worker.runAgent(spec(), ctx()), (err: unknown) => err instanceof AgentError && err.code === "no_result")

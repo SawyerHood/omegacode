@@ -274,7 +274,20 @@ export class OpencodeWorker implements Worker {
 
     if (streamError) throw streamError
     if (ctx.signal.aborted) throw new AgentInterrupted()
-    if (exit.code !== 0) throw exitError(PROVIDER, this.bin, exit)
+    if (exit.code !== 0) {
+      // Concurrent one-shot runs can race on opencode's local database ("database is locked",
+      // observed live with two parallel agents) — transient contention, so let withRetry back off
+      // instead of failing the agent on the first collision.
+      if (/database is locked/i.test(exit.stderrTail)) {
+        throw new AgentError({
+          provider: PROVIDER,
+          code: "provider_busy",
+          message: `opencode exited with transient database contention — retrying\n--- stderr (tail) ---\n${exit.stderrTail}`,
+          retryable: true,
+        })
+      }
+      throw exitError(PROVIDER, this.bin, exit)
+    }
     if (text.length === 0) {
       throw new AgentError({ provider: PROVIDER, code: "no_result", message: "opencode exited 0 without producing any assistant text" })
     }
