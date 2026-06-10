@@ -7,7 +7,7 @@
 // of the ones in ./types.ts; keep them in sync (a packaging test asserts the union members).
 
 declare global {
-  type OmegacodeProviderId = "codex" | "claude-code"
+  type OmegacodeProviderId = "codex" | "claude-code" | "opencode" | "pi"
 
   type OmegacodeSandbox = "read-only" | "workspace-write" | "danger-full-access"
 

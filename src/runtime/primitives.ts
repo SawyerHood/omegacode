@@ -18,7 +18,7 @@ import type {
   RunDefaults,
   WorkflowGlobals,
 } from "../dsl/types.js"
-import { addUsage, emptyUsage } from "../dsl/types.js"
+import { addUsage, emptyUsage, PROVIDER_IDS } from "../dsl/types.js"
 import type { WorkerFactory, WorkerProgress } from "../worker/index.js"
 import { AgentError, AgentInterrupted } from "../worker/index.js"
 import { withRetry } from "../worker/errors.js"
@@ -41,6 +41,7 @@ export class AgentFailedError extends WorkflowError {}
 
 /** Valid values for the enum-typed spec fields, validated at spec resolution (H14). */
 export const SPEC_ENUMS = {
+  provider: PROVIDER_IDS,
   sandbox: ["read-only", "workspace-write", "danger-full-access"],
   effort: ["none", "minimal", "low", "medium", "high", "xhigh", "max"],
   approval: ["never", "on-request"],
@@ -221,6 +222,9 @@ export class Runtime {
       maxTurns: opts?.maxTurns,
     }
     // Validate the RESOLVED values so both per-call opts and run defaults are covered (H14).
+    // Provider included: an unknown provider would otherwise only fail at the factory — and not
+    // at all under --fake, where it silently routes to the FakeWorker.
+    checkSpecEnum("provider", spec.provider)
     checkSpecEnum("sandbox", spec.sandbox)
     checkSpecEnum("effort", spec.effort)
     checkSpecEnum("approval", spec.approval)

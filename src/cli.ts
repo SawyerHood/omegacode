@@ -12,7 +12,7 @@ import { dataRoot, Journal, JournalNotFoundError, ResumePreconditionError } from
 import { WorkflowError } from "./runtime/primitives.js"
 import { startViewer } from "./server/serve.js"
 import { AgentError, AgentInterrupted } from "./worker/index.js"
-import { DEFAULTS, type Effort, type ProviderId, type Sandbox } from "./dsl/types.js"
+import { DEFAULTS, PROVIDER_IDS, type Effort, type Sandbox } from "./dsl/types.js"
 
 export interface Flags {
   _: string[]
@@ -131,7 +131,7 @@ function numberFlag(flags: Flags, name: string): number | undefined {
   return n
 }
 
-const PROVIDERS: ProviderId[] = ["codex", "claude-code"]
+const PROVIDERS = PROVIDER_IDS
 const SANDBOXES: Sandbox[] = ["read-only", "workspace-write", "danger-full-access"]
 const EFFORTS: Effort[] = ["none", "minimal", "low", "medium", "high", "xhigh", "max"]
 
@@ -378,7 +378,7 @@ function dirSize(dir: string): number {
 async function cmdRun(flags: Flags): Promise<void> {
   const file = (flags._ as string[])[1]
   if (!file) {
-    console.error("usage: omegacode run <file.workflow.js | name> [--args <json>] [--provider codex|claude-code] [--fake] [--json]")
+    console.error("usage: omegacode run <file.workflow.js | name> [--args <json>] [--provider codex|claude-code|opencode|pi] [--fake] [--json]")
     process.exitCode = 1
     return
   }
@@ -544,17 +544,52 @@ async function cmdSave(flags: Flags): Promise<void> {
 
 async function cmdDoctor(): Promise<void> {
   const { execFileSync } = await import("node:child_process")
-  const check = (bin: string, args: string[]): string => {
+  const { mkdtempSync } = await import("node:fs")
+  const { tmpdir } = await import("node:os")
+  const { versionAtLeast } = await import("./worker/subprocess-jsonl.js")
+  const { OPENCODE_MIN_VERSION } = await import("./worker/opencode.js")
+  const { PI_MIN_VERSION } = await import("./worker/pi.js")
+
+  const check = (bin: string, args: string[], opts: { env?: NodeJS.ProcessEnv; cwd?: string } = {}): string => {
     try {
-      return execFileSync(bin, args, { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim().split("\n")[0] ?? "ok"
+      return (
+        execFileSync(bin, args, { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], env: opts.env, cwd: opts.cwd, timeout: 10_000 })
+          .trim()
+          .split("\n")[0] ?? "ok"
+      )
     } catch {
       return "NOT FOUND"
     }
   }
+  // Flag below-minimum versions: the workers refuse them at runtime (provider_outdated), so the
+  // doctor row should say so up front rather than let the first paid run discover it.
+  const withMin = (out: string, min: string, hint: string): string => {
+    if (out === "NOT FOUND" || versionAtLeast(out, min)) return out
+    return `${out} — OUTDATED (< ${min}); ${hint}`
+  }
+
+  // Doctor must resolve binaries the same way the runtime does (env overrides), or it reports
+  // NOT FOUND for a binary the factory would happily spawn.
+  const codexBin = process.env.CODEX_BIN ?? "codex"
+  const opencodeBin = process.env.OPENCODE_BIN ?? "opencode"
+  const piBin = process.env.PI_BIN ?? "pi"
+
+  // pi probes run isolated (scratch agent dir, neutral cwd): old binaries wrote lock files and a
+  // repo-local .pi even on --version, and 0.79.1 is not confirmed clean.
+  const piScratch = mkdtempSync(join(tmpdir(), "omegacode-doctor-pi-"))
+  let piOut: string
+  try {
+    piOut = check(piBin, ["--version"], { env: { ...process.env, PI_CODING_AGENT_DIR: piScratch }, cwd: tmpdir() })
+  } finally {
+    rmSync(piScratch, { recursive: true, force: true })
+  }
+
   console.log("omegacode doctor")
   console.log(`  fake worker  : ok`)
-  console.log(`  codex        : ${check("codex", ["--version"])}`)
+  console.log(`  codex        : ${check(codexBin, ["--version"])}`)
   console.log(`  claude-code  : ${check("claude", ["--version"])}`)
+  console.log(`  opencode     : ${withMin(check(opencodeBin, ["--version"]), OPENCODE_MIN_VERSION, "upgrade the opencode CLI")}`)
+  console.log(`  pi           : ${withMin(piOut, PI_MIN_VERSION, "npm i -g @earendil-works/pi-coding-agent")}`)
   console.log(`  data dir     : ${dataRoot()}`)
 }
 
@@ -607,7 +642,7 @@ Each agent() spawns a real Codex (gpt-5.x) or Claude Code agent; you pick the pr
 Usage:
   omegacode run <file.workflow.js | name> [options]   Run a workflow (by path or saved name)
       --args '<json>' | --args-file <f>    input exposed as the \`args\` global
-      --provider codex|claude-code         default provider (per-agent opts override)
+      --provider codex|claude-code|opencode|pi   default provider (per-agent opts override)
       --model <m>  --effort <e>  --sandbox read-only|workspace-write|danger-full-access
       --cwd <dir>  --concurrency <N>       working dir; max concurrent agents (default ${DEFAULTS.concurrency})
       --budget <N>                         output-token ceiling (enables budget.*)

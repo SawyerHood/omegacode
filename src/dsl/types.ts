@@ -1,6 +1,8 @@
 // Shared type contracts for the whole system. Everything compiles against these.
 
-export type ProviderId = "codex" | "claude-code"
+/** The closed set of backend providers. Model strings stay open — each backend is authoritative. */
+export const PROVIDER_IDS = ["codex", "claude-code", "opencode", "pi"] as const
+export type ProviderId = (typeof PROVIDER_IDS)[number]
 
 /** read-only: no writes; workspace-write: write within cwd; danger-full-access: unrestricted. */
 export type Sandbox = "read-only" | "workspace-write" | "danger-full-access"

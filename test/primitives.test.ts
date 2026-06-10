@@ -618,19 +618,25 @@ test("random() varies with the run seed but is stable for the same seed", async 
   assert.notEqual(await run(7), await run(8)) // run-distinct
 })
 
-test("H14: agent() rejects invalid sandbox/effort/approval values at spec resolution", async () => {
+test("H14: agent() rejects invalid provider/sandbox/effort/approval values at spec resolution", async () => {
   // Workflow bodies are untyped JS: an unvalidated `sandbox: "readonly"` (typo for "read-only")
   // falls off the worker policy switches and is treated as writable — read-only silently bypassed.
+  // Provider must be validated here too: an unknown provider would otherwise only fail at the
+  // factory, and not at all under --fake (it silently routes to the FakeWorker).
   const b = build()
   try {
+    await assert.rejects(runBody(b, `return await agent("x", { provider: "open-code" })`), /invalid provider "open-code"/)
     await assert.rejects(runBody(b, `return await agent("x", { sandbox: "readonly" })`), /invalid sandbox "readonly"/)
     await assert.rejects(runBody(b, `return await agent("x", { effort: "ultra" })`), /invalid effort "ultra"/)
     await assert.rejects(runBody(b, `return await agent("x", { approval: "always" })`), /invalid approval "always"/)
     // the worker never saw an unvalidated policy
     assert.equal(b.worker.calls.length, 0)
-    // valid values still resolve and run
+    // valid values still resolve and run — including the new provider ids
     const ok = await runBody(b, `return await agent("y", { sandbox: "read-only", effort: "high", approval: "never" })`)
     assert.equal(ok, "echo:y")
+    const pi = await runBody(b, `return await agent("z", { provider: "pi", sandbox: "danger-full-access" })`)
+    assert.equal(pi, "echo:z")
+    assert.equal(b.worker.calls.at(-1)?.provider, "pi")
   } finally {
     b.cleanup()
   }

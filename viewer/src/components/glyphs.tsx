@@ -38,10 +38,29 @@ export function StatusGlyph({ state, className, quiet }: { state: AgentState | R
   return <Icon name="Info" className={cn("size-3.5 text-muted-foreground/50", className)} aria-label="unknown" />
 }
 
-/** Provider brand mark (OpenAI for codex, Anthropic/Claude for claude-code). */
+/** Neutral monogram badge for providers without a bundled brand icon. */
+function MonogramBadge({ label, className }: { label: string; className?: string }) {
+  return (
+    <span
+      className={cn(
+        "flex size-3.5 shrink-0 items-center justify-center rounded-[3px] border border-muted-foreground/40 font-mono text-[8px] leading-none text-muted-foreground",
+        className,
+      )}
+      aria-hidden
+    >
+      {label}
+    </span>
+  )
+}
+
+/** Provider mark: brand icons for codex/claude-code, monogram badges for opencode/pi.
+ *  Unknown provider ids render a neutral badge — never someone else's brand. */
 export function ProviderIcon({ provider, className }: { provider: ProviderId; className?: string }) {
-  const Brand = provider === "claude-code" ? ClaudeIcon : OpenAiIcon
-  return <Brand className={cn("size-3.5 shrink-0 text-muted-foreground", className)} />
+  if (provider === "claude-code") return <ClaudeIcon className={cn("size-3.5 shrink-0 text-muted-foreground", className)} />
+  if (provider === "codex") return <OpenAiIcon className={cn("size-3.5 shrink-0 text-muted-foreground", className)} />
+  if (provider === "opencode") return <MonogramBadge label="OC" className={className} />
+  if (provider === "pi") return <MonogramBadge label="π" className={className} />
+  return <MonogramBadge label="·" className={className} />
 }
 
 /** Shimmering in-progress text (bb's animate-shine). */

@@ -158,8 +158,15 @@ describe("ambient inlined types stay in sync with dsl/types.ts (M31 drift guard)
     return [...m![1].matchAll(/"([^"]+)"/g)].map((x) => x[1]).sort()
   }
 
+  // ProviderId is derived from the PROVIDER_IDS tuple (not a literal union) — parse the tuple.
+  test("OmegacodeProviderId matches PROVIDER_IDS", () => {
+    const m = types.match(/const PROVIDER_IDS\s*=\s*\[([^\]]+)\]/)
+    assert.ok(m, "PROVIDER_IDS tuple not found in dsl/types.ts")
+    const tuple = [...m![1].matchAll(/"([^"]+)"/g)].map((x) => x[1]).sort()
+    assert.deepEqual(unionMembers(ambient, "OmegacodeProviderId"), tuple)
+  })
+
   for (const [canonical, inlined] of [
-    ["ProviderId", "OmegacodeProviderId"],
     ["Sandbox", "OmegacodeSandbox"],
     ["Effort", "OmegacodeEffort"],
     ["Approval", "OmegacodeApproval"],

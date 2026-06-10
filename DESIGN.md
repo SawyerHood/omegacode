@@ -17,6 +17,17 @@ interface.
 > and usage guide** (run `omegacode guide` to read it); when this design doc and SKILL.md / `omegacode
 > --help` disagree, SKILL.md and the CLI win. §12 below lists the actual shipped CLI surface; §13 the
 > actual repo layout.
+>
+> **Provider-set amendment (2026-06):** the shipped provider set is now **four**, not two. `opencode`
+> (OpenCode CLI ≥ 1.16.2) and `pi` (`@earendil-works/pi-coding-agent` ≥ 0.79.1) joined as
+> spawn-per-call subprocess workers (`src/worker/opencode.ts`, `src/worker/pi.ts`, shared mechanics in
+> `src/worker/subprocess-jsonl.ts`). Both are **full-access-only**: neither CLI can enforce a confined
+> sandbox, so `read-only`/`workspace-write` are rejected pre-spawn and calls require an explicit
+> `sandbox: "danger-full-access"`. Both reject `maxTurns`; opencode also rejects `effort` (pi maps it
+> onto `--thinking`). `instructions` maps to pi's `--append-system-prompt` and to a delimited prompt
+> preamble on opencode. Structured output uses a silent extraction turn plus the central validation
+> path. Bin overrides: `OPENCODE_BIN` / `PI_BIN`. Outdated binaries are refused (`provider_outdated`).
+> The "two providers" framing below is historical.
 
 ---
 

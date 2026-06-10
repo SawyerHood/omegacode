@@ -3,6 +3,8 @@ import { AgentError, type Worker, type WorkerFactory } from "./index.js"
 import { FakeWorker } from "./fake.js"
 import { CodexWorker } from "./codex.js"
 import { ClaudeWorker } from "./claude.js"
+import { OpencodeWorker } from "./opencode.js"
+import { PiWorker } from "./pi.js"
 
 export interface FactoryOpts {
   /** Use the in-process FakeWorker for every provider (smoke tests, --fake). */
@@ -11,6 +13,8 @@ export interface FactoryOpts {
   claudeModel?: string
   /** Path to the claude-code executable (forwarded to the SDK). */
   pathToClaudeCodeExecutable?: string
+  opencodeBin?: string
+  piBin?: string
 }
 
 export class DefaultWorkerFactory implements WorkerFactory {
@@ -36,6 +40,10 @@ export class DefaultWorkerFactory implements WorkerFactory {
           model: this.opts.claudeModel,
           pathToClaudeCodeExecutable: this.opts.pathToClaudeCodeExecutable,
         })
+      case "opencode":
+        return new OpencodeWorker({ bin: this.opts.opencodeBin })
+      case "pi":
+        return new PiWorker({ bin: this.opts.piBin })
       default: {
         // Exhaustive: a new ProviderId must be handled here, and an unknown runtime value
         // must fail loudly instead of silently routing to a billed provider.

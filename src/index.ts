@@ -17,6 +17,7 @@ export type {
   WorkflowBudget,
   WorkflowGlobals,
 } from "./dsl/types.js"
+export { PROVIDER_IDS } from "./dsl/types.js"
 
 export { runWorkflow } from "./runtime/run.js"
 export type { RunOptions, RunOutcome, RunOverrides } from "./runtime/run.js"

@@ -5,7 +5,7 @@
 
 import { strict as assert } from "node:assert"
 import { execFileSync, spawn } from "node:child_process"
-import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { get as httpGet } from "node:http"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -260,6 +260,41 @@ describe("CLI end-to-end (--fake)", () => {
     assert.equal(r.code, 1)
     assert.match(r.stderr, /--provider must be one of/)
     assert.doesNotMatch(r.stderr, /at \w+ \(/) // no stack frames
+  })
+
+  test("--provider opencode and --provider pi are accepted (fake round-trip)", async () => {
+    for (const provider of ["opencode", "pi"]) {
+      const r = await runCli(["run", wf, "--provider", provider, "--fake", "--no-serve", "--json"], { OMEGACODE_HOME: home })
+      assert.equal(r.code, 0, `stderr=${r.stderr}`)
+      assert.equal(JSON.parse(r.stdout).status, "completed")
+    }
+  })
+
+  test("doctor resolves bins via env overrides and flags below-minimum versions as OUTDATED", { skip: process.platform === "win32" }, async () => {
+    // Stub binaries: opencode reports an outdated version, pi a current one.
+    const ocStub = join(home, "fake-opencode")
+    const piStub = join(home, "fake-pi")
+    writeFileSync(ocStub, "#!/bin/sh\necho 1.15.0\n")
+    writeFileSync(piStub, "#!/bin/sh\necho 0.79.1\n")
+    chmodSync(ocStub, 0o755)
+    chmodSync(piStub, 0o755)
+    const r = await runCli(["doctor"], { OMEGACODE_HOME: home, OPENCODE_BIN: ocStub, PI_BIN: piStub })
+    assert.equal(r.code, 0, `stderr=${r.stderr}`)
+    assert.match(r.stdout, /opencode\s+: 1\.15\.0 — OUTDATED \(< 1\.16\.2\)/)
+    assert.match(r.stdout, /pi\s+: 0\.79\.1\n/)
+    assert.doesNotMatch(r.stdout, /pi\s+: 0\.79\.1 — OUTDATED/)
+  })
+
+  test("a meta.defaultProvider typo is rejected at run setup, even under --fake", async () => {
+    const bad = join(home, "bad-default-provider.workflow.js")
+    writeFileSync(
+      bad,
+      `export const meta = { name: "bad", description: "typo'd provider", defaultProvider: "open-code" }\n` +
+        `return await agent("say hi")\n`,
+    )
+    const r = await runCli(["run", bad, "--fake", "--no-serve"], { OMEGACODE_HOME: home })
+    assert.equal(r.code, 1)
+    assert.match(r.stderr, /invalid provider "open-code"/)
   })
 
   test("invalid --sandbox (typo for read-only) is rejected (H14)", async () => {

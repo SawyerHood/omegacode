@@ -7,7 +7,7 @@
 An **agent-agnostic implementation of Claude Code's Workflows**. omegacode runs JavaScript workflow
 files that orchestrate fleets of coding agents with a small deterministic DSL — `agent()` /
 `parallel()` / `pipeline()` / `phase()` — and the workers are pluggable: the same workflow can
-drive **Claude Code**, **Codex**, or both in a single run.
+drive **Claude Code**, **Codex**, **OpenCode**, and **pi** in a single run.
 
 ## Install
 
@@ -20,8 +20,16 @@ omegacode install-skill
 `~/.claude/skills/` (Claude Code) and `~/.agents/skills/` (Codex and other agents). Pass
 `--claude` or `--agents` to install to just one.
 
-You'll need Node 20+ and at least one worker installed: `codex` (the default provider) and/or
-`claude`. Run `omegacode doctor` to check.
+You'll need Node 20+ and at least one worker installed: `codex` (the default provider), `claude`,
+`opencode` (≥ 1.16.2), and/or `pi` (≥ 0.79.1, `npm i -g @earendil-works/pi-coding-agent`). Run
+`omegacode doctor` to check — it flags binaries below the minimum versions, which the workers
+refuse at runtime.
+
+> **Note on opencode/pi sandboxing:** neither CLI can enforce a confined sandbox, so omegacode
+> accepts them **only** with an explicit `sandbox: "danger-full-access"` (per call or via
+> `--sandbox`). The default `read-only` sandbox is rejected with an error naming the remedy —
+> a deliberate fail-closed choice. Model strings pass through verbatim to the backend (e.g.
+> `agent("…", { provider: "opencode", model: "openrouter/anthropic/claude-sonnet-4.5", sandbox: "danger-full-access" })`).
 
 ## Use it
 
@@ -52,9 +60,9 @@ return await pipeline(
 )
 ```
 
-Plain JavaScript, no imports — the DSL is injected. Each `agent()` spawns a real Codex or Claude
-Code agent; omit `provider` to inherit whatever the run was started with (`--provider`, default
-`codex`), or pin it per call when you want cross-provider diversity.
+Plain JavaScript, no imports — the DSL is injected. Each `agent()` spawns a real Codex, Claude
+Code, OpenCode, or pi agent; omit `provider` to inherit whatever the run was started with
+(`--provider`, default `codex`), or pin it per call when you want cross-provider diversity.
 
 ## CLI
 
@@ -62,7 +70,7 @@ Code agent; omit `provider` to inherit whatever the run was started with (`--pro
 omegacode run <file.workflow.js | name>   # run a workflow (auto-starts the live viewer)
 omegacode serve                           # read-only dashboard over all runs
 omegacode run <name> --resume <runId>     # resume — only the changed suffix re-runs
-omegacode doctor                          # check codex/claude availability
+omegacode doctor                          # check codex/claude/opencode/pi availability + versions
 omegacode guide                           # print the full authoring guide
 ```
 
