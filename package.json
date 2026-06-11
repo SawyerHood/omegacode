@@ -1,6 +1,6 @@
 {
   "name": "omegacode",
-  "version": "0.0.5",
+  "version": "0.0.6",
   "description": "Run JS workflow files that orchestrate Codex, Claude Code, OpenCode, and pi agents (agent()/parallel()/pipeline()/phase()).",
   "license": "MIT",
   "author": "Sawyer Hood",
