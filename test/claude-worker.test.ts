@@ -52,6 +52,8 @@ function spec(over: Partial<AgentSpec> = {}): AgentSpec {
   return { prompt: "do the thing", provider: "claude-code", cwd: "/work/repo", sandbox: "workspace-write", approval: "never", ...over }
 }
 
+const SCHEMA = { type: "object", properties: { answer: { type: "number" } }, required: ["answer"] }
+
 /** The shape the worker installs (the SDK type carries an extra options param we don't use). */
 type Gate = (toolName: string, input: Record<string, unknown>) => Promise<PermissionResult>
 
@@ -131,11 +133,10 @@ test("spec → SDK options: cwd/model/maxTurns/effort floor/instructions preset 
 })
 
 test("schema spec: outputFormat is sent and structured_output comes back on the result", async () => {
-  const schema = { type: "object", properties: { answer: { type: "number" } }, required: ["answer"] }
   const calls: QueryCall[] = []
   const worker = new ClaudeWorker({ queryFn: scripted([resultMsg({ structured_output: { answer: 42 } })], calls) })
-  const res = await worker.runAgent(spec({ schema }), ctx())
-  assert.deepEqual(calls[0]!.options.outputFormat, { type: "json_schema", schema })
+  const res = await worker.runAgent(spec({ schema: SCHEMA }), ctx())
+  assert.deepEqual(calls[0]!.options.outputFormat, { type: "json_schema", schema: SCHEMA })
   assert.deepEqual(res.structured, { answer: 42 })
   // without a schema the same SDK field is ignored and no outputFormat is sent
   const calls2: QueryCall[] = []
@@ -253,6 +254,179 @@ test("an SDK throw is wrapped as retryable sdk_error (message preserved)", async
     },
   })
   await assert.rejects(syncThrow.runAgent(spec(), ctx()), (e) => e instanceof AgentError && e.code === "sdk_error" && /spawn failed/.test(e.message))
+})
+
+// ===========================================================================
+// background-task stream shapes — StructuredOutput recovery
+// (Claude Code's background tasks can end the stream without a result message,
+// or append a post-answer task-notification turn whose result lacks
+// structured_output and whose text is watcher chatter.)
+// ===========================================================================
+
+/** assistant StructuredOutput call + its accepted tool_result. */
+function structuredOutputTurn(payload: unknown, over: { id?: string; is_error?: boolean } = {}): unknown[] {
+  const id = over.id ?? "so1"
+  return [
+    assistantMsg([{ type: "tool_use", id, name: "StructuredOutput", input: payload }]),
+    userMsg([{ type: "tool_result", tool_use_id: id, content: "Structured output provided successfully", is_error: over.is_error ?? false }]),
+  ]
+}
+
+test("stream ends with NO result after an accepted StructuredOutput → recovered, not no_result", async () => {
+  const worker = new ClaudeWorker({
+    queryFn: scripted([
+      ...structuredOutputTurn({ answer: 42 }),
+      assistantMsg([{ type: "text", text: "gate is green" }]), // final answer, then the stream just closes
+    ]),
+  })
+  const res = await worker.runAgent(spec({ schema: SCHEMA }), ctx())
+  assert.equal(res.status, "completed")
+  assert.deepEqual(res.structured, { answer: 42 })
+  assert.equal(res.text, "gate is green")
+})
+
+test("no-result recovery sums assistant usage deduped by API message id (cost unknowable → 0)", async () => {
+  const usage = { input_tokens: 100, cache_read_input_tokens: 1000, cache_creation_input_tokens: 10, output_tokens: 7 }
+  const worker = new ClaudeWorker({
+    queryFn: scripted([
+      { type: "assistant", message: { id: "m1", usage, content: [{ type: "tool_use", id: "so1", name: "StructuredOutput", input: { answer: 1 } }] } },
+      { type: "assistant", message: { id: "m1", usage, content: [{ type: "text", text: "same API message, second block" }] } }, // repeat id: counted once
+      userMsg([{ type: "tool_result", tool_use_id: "so1", content: "ok", is_error: false }]),
+      { type: "assistant", message: { id: "m2", usage: { input_tokens: 50, output_tokens: 3 }, content: [{ type: "text", text: "done" }] } },
+    ]),
+  })
+  const res = await worker.runAgent(spec({ schema: SCHEMA }), ctx())
+  assert.equal(res.usage.inputTokens, 1160)
+  assert.equal(res.usage.outputTokens, 10)
+  assert.equal(res.usage.costUsd, 0)
+})
+
+test("a post-answer NOTIFICATION turn's result lacking structured_output → recovered from the tool payload", async () => {
+  const worker = new ClaudeWorker({
+    queryFn: scripted([
+      ...structuredOutputTurn({ answer: 42 }),
+      assistantMsg([{ type: "text", text: "that's just the watcher exiting — nothing new" }]),
+      resultMsg({ origin: { kind: "task-notification" }, total_cost_usd: 1.68 }), // no structured_output field
+    ]),
+  })
+  const res = await worker.runAgent(spec({ schema: SCHEMA }), ctx())
+  assert.deepEqual(res.structured, { answer: 42 })
+  assert.equal(res.usage.costUsd, 1.68) // cost still taken from the notification result — it's all we have
+})
+
+test("a non-success NOTIFICATION result after an accepted StructuredOutput does not fail the finished agent", async () => {
+  const worker = new ClaudeWorker({
+    queryFn: scripted([
+      ...structuredOutputTurn({ answer: 42 }),
+      resultMsg({ subtype: "error_during_execution", origin: { kind: "task-notification" } }),
+    ]),
+  })
+  const res = await worker.runAgent(spec({ schema: SCHEMA }), ctx())
+  assert.equal(res.status, "completed")
+  assert.deepEqual(res.structured, { answer: 42 })
+})
+
+test("the PRIMARY turn's result is preferred over a later notification turn's (text and structured)", async () => {
+  // free-form: the real answer must not be replaced by watcher chatter
+  const freeForm = new ClaudeWorker({
+    queryFn: scripted([
+      resultMsg({ result: "the real analysis" }),
+      resultMsg({ result: "background task completed — nothing new", origin: { kind: "task-notification" } }),
+    ]),
+  })
+  const r1 = await freeForm.runAgent(spec(), ctx())
+  assert.equal(r1.text, "the real analysis")
+  // schema: the primary result's structured_output survives a notification result that lacks it
+  const schemaed = new ClaudeWorker({
+    queryFn: scripted([
+      resultMsg({ structured_output: { answer: 7 } }),
+      resultMsg({ origin: { kind: "task-notification" } }),
+    ]),
+  })
+  const r2 = await schemaed.runAgent(spec({ schema: SCHEMA }), ctx())
+  assert.deepEqual(r2.structured, { answer: 7 })
+})
+
+test("when the result carries structured_output (even alongside a tool payload), the result's wins; null falls back", async () => {
+  const carried = new ClaudeWorker({
+    queryFn: scripted([...structuredOutputTurn({ answer: 1 }), resultMsg({ structured_output: { answer: 2 } })]),
+  })
+  assert.deepEqual((await carried.runAgent(spec({ schema: SCHEMA }), ctx())).structured, { answer: 2 })
+  // an explicit null structured_output must not shadow the accepted tool payload
+  const nulled = new ClaudeWorker({
+    queryFn: scripted([...structuredOutputTurn({ answer: 3 }), resultMsg({ structured_output: null })]),
+  })
+  assert.deepEqual((await nulled.runAgent(spec({ schema: SCHEMA }), ctx())).structured, { answer: 3 })
+})
+
+test("a result followed by trailing assistant messages still resolves (last RESULT, not last message)", async () => {
+  const worker = new ClaudeWorker({
+    queryFn: scripted([resultMsg(), assistantMsg([{ type: "text", text: "trailing notification chatter" }])]),
+  })
+  const res = await worker.runAgent(spec(), ctx())
+  assert.equal(res.status, "completed")
+  assert.equal(res.text, "all done")
+})
+
+test("abort that truncates the stream after an accepted StructuredOutput → AgentInterrupted, not completed", async () => {
+  const ac = new AbortController()
+  const worker = new ClaudeWorker({
+    queryFn: () =>
+      (async function* (): AsyncGenerator<SDKMessage> {
+        for (const m of structuredOutputTurn({ answer: 42 })) yield m as SDKMessage
+        ac.abort() // the SDK can end the iterator cleanly on abort — no throw, no result message
+      })(),
+  })
+  await assert.rejects(worker.runAgent(spec({ schema: SCHEMA }), ctx(ac.signal)), (e) => e instanceof AgentInterrupted)
+})
+
+test("subagent-relayed messages (parent_tool_use_id set) do not feed recovery state or usage", async () => {
+  const worker = new ClaudeWorker({
+    queryFn: scripted([
+      {
+        type: "assistant",
+        parent_tool_use_id: "task1", // a Task subagent's stream relayed through the parent query
+        message: { id: "sub1", usage: { input_tokens: 999, output_tokens: 99 }, content: [{ type: "tool_use", id: "so1", name: "StructuredOutput", input: { answer: 13 } }] },
+      },
+      userMsg([{ type: "tool_result", tool_use_id: "so1", content: "ok", is_error: false }]),
+    ]),
+  })
+  await assert.rejects(worker.runAgent(spec({ schema: SCHEMA }), ctx()), (e) => e instanceof AgentError && e.code === "no_result")
+})
+
+test("a REJECTED StructuredOutput call is not recovery evidence; a later accepted one is", async () => {
+  // rejected only → still no_result
+  const rejectedOnly = new ClaudeWorker({
+    queryFn: scripted([...structuredOutputTurn({ answer: "bad" }, { is_error: true }), assistantMsg([{ type: "text", text: "hm" }])]),
+  })
+  await assert.rejects(rejectedOnly.runAgent(spec({ schema: SCHEMA }), ctx()), (e) => e instanceof AgentError && e.code === "no_result")
+  // rejected then accepted retry → the retry's payload is recovered
+  const retried = new ClaudeWorker({
+    queryFn: scripted([
+      ...structuredOutputTurn({ answer: "bad" }, { id: "so1", is_error: true }),
+      ...structuredOutputTurn({ answer: 7 }, { id: "so2" }),
+    ]),
+  })
+  const res = await retried.runAgent(spec({ schema: SCHEMA }), ctx())
+  assert.deepEqual(res.structured, { answer: 7 })
+})
+
+test("an IN-FLIGHT StructuredOutput call at truncation disables recovery (the accepted payload was being superseded)", async () => {
+  const worker = new ClaudeWorker({
+    queryFn: scripted([
+      ...structuredOutputTurn({ answer: 1 }), // accepted
+      assistantMsg([{ type: "tool_use", id: "so2", name: "StructuredOutput", input: { answer: 2 } }]), // stream cuts before so2's tool_result
+    ]),
+  })
+  await assert.rejects(worker.runAgent(spec({ schema: SCHEMA }), ctx()), (e) => e instanceof AgentError && e.code === "no_result")
+})
+
+test("no-result recovery is schema-gated: free-form agents keep the hard no_result error", async () => {
+  // Same truncated-stream shape, but no spec.schema → partial text must not pass as an answer.
+  const worker = new ClaudeWorker({
+    queryFn: scripted([...structuredOutputTurn({ answer: 42 }), assistantMsg([{ type: "text", text: "partial" }])]),
+  })
+  await assert.rejects(worker.runAgent(spec(), ctx()), (e) => e instanceof AgentError && e.code === "no_result")
 })
 
 // ===========================================================================
