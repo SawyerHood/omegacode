@@ -10,7 +10,7 @@ import { readlinkSync, realpathSync } from "node:fs"
 import { homedir } from "node:os"
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path"
 import { query, type Options, type PermissionResult, type SDKMessage } from "@anthropic-ai/claude-agent-sdk"
-import { emptyUsage, type AgentResult, type AgentSpec, type AgentUsage, type Effort, type Sandbox } from "../dsl/types.js"
+import { addUsage, emptyUsage, type AgentResult, type AgentSpec, type AgentUsage, type Effort, type Sandbox } from "../dsl/types.js"
 import type { Worker, WorkerContext } from "./index.js"
 import { AgentError, AgentInterrupted } from "./index.js"
 import { assertValidSchema, toClaudeOutputFormat } from "./schema.js"
@@ -97,23 +97,62 @@ export class ClaudeWorker implements Worker {
     if (this.opts.pathToClaudeCodeExecutable) options.pathToClaudeCodeExecutable = this.opts.pathToClaudeCodeExecutable
 
     try {
-      let last: SDKMessage | undefined
+      // The CLI normally ends the stream with a `result` message carrying the final text, usage,
+      // and structured output. When background tasks (Monitor / Bash run_in_background) straddle
+      // the end of the turn, that contract breaks two ways: the stream can end with no result
+      // message at all, or a task-notification turn appended after the real answer can emit its
+      // own result that lacks the structured output an earlier turn already provided (and whose
+      // text is watcher chatter, not the answer). So: prefer the last NON-notification result
+      // (`origin.kind` discriminates), and capture the accepted StructuredOutput tool payload
+      // from the stream as the recovery source — otherwise finished agents get marked failed.
+      let primaryResult: Extract<SDKMessage, { type: "result" }> | undefined
+      let anyResult: Extract<SDKMessage, { type: "result" }> | undefined
+      let lastText = ""
+      let structuredFromTool: unknown
+      let pendingStructuredId: string | undefined
+      let pendingStructuredInput: unknown
+      let lastUsageId: string | undefined
+      let streamUsage = emptyUsage()
       const runQuery = this.opts.queryFn ?? query
       for await (const message of runQuery({ prompt: spec.prompt, options })) {
-        last = message
-        if (message.type === "assistant") {
-          for (const block of asBlocks((message.message as { content?: unknown }).content)) {
+        if (message.type === "result") {
+          anyResult = message
+          if (message.origin?.kind !== "task-notification") primaryResult = message
+        } else if (message.type === "assistant") {
+          const m = message.message as { id?: unknown; usage?: unknown; content?: unknown }
+          // Subagent (Task) messages relay through the same stream with parent_tool_use_id set —
+          // keep them out of the recovery bookkeeping (progress events still flow below).
+          const topLevel = message.parent_tool_use_id == null
+          // Best-effort usage for the no-result recovery path (a result message supersedes this).
+          // The SDK repeats one API message across consecutive assistant events with the same
+          // (final) usage, so count each id once; cost stays 0 — only a result message knows it.
+          if (topLevel && typeof m.id === "string" && m.id !== lastUsageId) {
+            lastUsageId = m.id
+            streamUsage = addUsage(streamUsage, usageFromResult({ usage: m.usage }))
+          }
+          for (const block of asBlocks(m.content)) {
             if (block.type === "text" && typeof block.text === "string") {
+              if (topLevel) lastText = block.text
               ctx.onProgress({ kind: "text", text: block.text })
             } else if (block.type === "thinking" && typeof block.thinking === "string") {
               ctx.onProgress({ kind: "reasoning", text: block.thinking })
             } else if (block.type === "tool_use" && typeof block.name === "string") {
+              if (topLevel && block.name === "StructuredOutput" && typeof block.id === "string") {
+                pendingStructuredId = block.id
+                pendingStructuredInput = block.input
+              }
               ctx.onProgress({ kind: "tool", id: typeof block.id === "string" ? block.id : undefined, name: block.name, input: block.input })
             }
           }
         } else if (message.type === "user") {
           for (const block of asBlocks((message.message as { content?: unknown }).content)) {
             if (block.type === "tool_result") {
+              // Commit the payload only once the CLI accepted it — a rejected call gets retried
+              // by the model and must not shadow the eventual good one.
+              if (pendingStructuredId !== undefined && block.tool_use_id === pendingStructuredId && block.is_error !== true) {
+                structuredFromTool = pendingStructuredInput
+                pendingStructuredId = pendingStructuredInput = undefined
+              }
               const out = typeof block.content === "string" ? block.content : JSON.stringify(block.content)
               ctx.onProgress({ kind: "tool-result", id: typeof block.tool_use_id === "string" ? block.tool_use_id : undefined, output: out, isError: block.is_error === true })
             }
@@ -121,19 +160,37 @@ export class ClaudeWorker implements Worker {
         }
       }
 
-      if (!last || last.type !== "result") {
+      if (!primaryResult && spec.schema && structuredFromTool !== undefined && pendingStructuredId === undefined) {
+        // The real turn's result never arrived (at most a notification turn's did), but the agent
+        // demonstrably finished its deliverable — the CLI accepted its StructuredOutput call.
+        // Recover instead of discarding finished work; schema validation still happens downstream
+        // in finalizeResult. A still-pending call is evidence of the opposite — the agent was
+        // superseding the accepted payload when the stream cut — so it disables recovery rather
+        // than deliver stale data. An abort can truncate the stream into this same shape — that
+        // must stay an interruption, not a success with a possibly-superseded payload.
+        if (ctx.signal.aborted) throw new AgentInterrupted()
+        // Tokens come from the stream; cost only a result message knows — take what we have.
+        if (anyResult) streamUsage.costUsd = usageFromResult(anyResult).costUsd
+        return { text: lastText, structured: structuredFromTool, status: "completed", usage: streamUsage }
+      }
+      // A lone notification-turn result is still a better last resort than no_result for
+      // free-form agents; with a schema the recovery branch above already outranked it.
+      const lastResult = primaryResult ?? anyResult
+      if (!lastResult) {
+        // Free-form agents have no completion marker (partial text from a truncated stream must
+        // not pass as an answer), so without the StructuredOutput evidence the error stays hard.
         throw new AgentError({ provider: "claude-code", code: "no_result", message: "claude query ended without a result" })
       }
-      const usage = usageFromResult(last)
-      if (last.subtype !== "success") {
+      const usage = usageFromResult(lastResult)
+      if (lastResult.subtype !== "success") {
         // error_max_turns is a terminal cap, not a transient fault — never retry it. Carry the
         // usage on the error: failed turns still bill, so budget ceilings must see them.
-        const retryable = last.subtype !== "error_max_turns" && /rate|overload|529|429/i.test(last.subtype)
-        throw new AgentError({ provider: "claude-code", code: last.subtype, message: `claude result: ${last.subtype}`, retryable, usage })
+        const retryable = lastResult.subtype !== "error_max_turns" && /rate|overload|529|429/i.test(lastResult.subtype)
+        throw new AgentError({ provider: "claude-code", code: lastResult.subtype, message: `claude result: ${lastResult.subtype}`, retryable, usage })
       }
       return {
-        text: last.result,
-        structured: spec.schema ? last.structured_output : undefined,
+        text: lastResult.result,
+        structured: spec.schema ? (lastResult.structured_output ?? structuredFromTool) : undefined,
         status: "completed",
         usage,
       }
