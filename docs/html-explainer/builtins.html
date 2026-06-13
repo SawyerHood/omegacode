@@ -1,0 +1,656 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>omegacode — the built-in six, traced</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Schibsted+Grotesk:ital,wght@0,400;0,500;0,700;1,400&family=IBM+Plex+Mono:ital,wght@0,400;0,500;0,600;1,400&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#0a0d14;
+  --bg2:#0d111c;
+  --panel:#11172a;
+  --panel2:#0e1322;
+  --line:#222b44;
+  --line2:#2c3756;
+  --ink:#e9e4d6;
+  --muted:#929aae;
+  --faint:#5d6579;
+  --amber:#ffb454;
+  --amber-dim:rgba(255,180,84,.14);
+  --cyan:#5ccfe6;
+  --cyan-dim:rgba(92,207,230,.13);
+  --coral:#ff8f73;
+  --coral-dim:rgba(255,143,115,.13);
+  --violet:#c792ea;
+  --green:#87d96c;
+  --green-dim:rgba(135,217,108,.12);
+  --red:#f25f6c;
+  --mono:'IBM Plex Mono',ui-monospace,monospace;
+  --serif:'Instrument Serif',Georgia,serif;
+  --sans:'Schibsted Grotesk',sans-serif;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{scroll-behavior:smooth}
+body{background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:16px;line-height:1.6;overflow-x:hidden}
+body::before{
+  content:'';position:fixed;inset:0;z-index:-2;pointer-events:none;
+  background:
+    radial-gradient(900px 600px at 88% -8%, rgba(255,180,84,.07), transparent 60%),
+    radial-gradient(1000px 700px at 5% 20%, rgba(92,207,230,.06), transparent 60%),
+    radial-gradient(800px 800px at 50% 110%, rgba(199,146,234,.05), transparent 55%),
+    linear-gradient(rgba(34,43,68,.32) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(34,43,68,.32) 1px, transparent 1px);
+  background-size:auto,auto,auto,56px 56px,56px 56px;
+}
+body::after{
+  content:'';position:fixed;inset:0;z-index:-1;pointer-events:none;opacity:.05;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+::selection{background:var(--amber);color:#181104}
+a{color:var(--cyan);text-decoration:none}
+a:hover{text-decoration:underline}
+code,pre{font-family:var(--mono)}
+
+nav{
+  position:fixed;top:0;left:0;right:0;z-index:50;
+  display:flex;align-items:center;gap:1.4rem;
+  padding:.65rem 1.4rem;
+  background:rgba(10,13,20,.82);backdrop-filter:blur(12px);
+  border-bottom:1px solid var(--line);
+  font-family:var(--mono);font-size:.72rem;
+}
+nav .mark{color:var(--amber);font-weight:600;letter-spacing:.04em;white-space:nowrap}
+nav .mark::before{content:'Ω ';color:var(--cyan)}
+nav .links{display:flex;gap:1.1rem;overflow-x:auto;scrollbar-width:none}
+nav .links::-webkit-scrollbar{display:none}
+nav .links a{color:var(--muted);white-space:nowrap;transition:color .15s}
+nav .links a:hover{color:var(--amber);text-decoration:none}
+nav .back{margin-left:auto;color:var(--cyan);white-space:nowrap}
+
+.wrap{max-width:1120px;margin:0 auto;padding:0 1.4rem}
+section{padding:4.5rem 0 .5rem;scroll-margin-top:64px}
+.kicker{
+  font-family:var(--mono);font-size:.72rem;letter-spacing:.22em;
+  color:var(--amber);text-transform:uppercase;margin-bottom:.9rem;
+}
+.kicker::before{content:'';display:inline-block;width:26px;height:1px;background:var(--amber);vertical-align:middle;margin-right:.7rem}
+h2{font-family:var(--serif);font-weight:400;font-size:clamp(1.8rem,3.6vw,2.6rem);line-height:1.08;margin-bottom:.8rem}
+h2 em{font-style:italic;color:var(--amber)}
+.lede{color:var(--muted);max-width:46rem;font-size:1.02rem;margin-bottom:1.8rem}
+.lede code, p code, li code{
+  background:rgba(255,180,84,.09);border:1px solid rgba(255,180,84,.18);
+  border-radius:4px;padding:.06em .34em;font-size:.86em;color:var(--amber);white-space:nowrap;
+}
+.js .rv{opacity:0;transform:translateY(22px);transition:opacity .7s ease,transform .7s cubic-bezier(.2,.7,.2,1)}
+.js .rv.in{opacity:1;transform:none}
+
+/* hero */
+header.hero{padding:8.5rem 0 1rem}
+.hero h1{font-family:var(--serif);font-weight:400;font-size:clamp(2.8rem,7vw,5.2rem);line-height:1;max-width:16ch}
+.hero h1 .l1,.hero h1 .l2{display:block;opacity:0;animation:rise .9s cubic-bezier(.2,.7,.2,1) forwards}
+.hero h1 .l1{animation-delay:.15s}
+.hero h1 .l2{animation-delay:.32s;color:var(--amber);font-style:italic}
+.hero .sub{margin-top:1.4rem;max-width:44rem;color:var(--muted);font-size:1.06rem;opacity:0;animation:rise .9s .5s cubic-bezier(.2,.7,.2,1) forwards}
+.hero .sub strong{color:var(--ink);font-weight:500}
+@keyframes rise{from{opacity:0;transform:translateY(26px)}to{opacity:1;transform:none}}
+
+/* legend */
+.leg{
+  display:flex;gap:1.3rem;flex-wrap:wrap;margin-top:1.8rem;
+  font-family:var(--mono);font-size:.68rem;color:var(--muted);
+  opacity:0;animation:rise .9s .7s cubic-bezier(.2,.7,.2,1) forwards;
+}
+.leg i{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:.4rem;vertical-align:-1px}
+.leg .run i{background:var(--amber)}
+.leg .cx i{background:var(--cyan)}
+.leg .cl i{background:var(--coral)}
+.leg .bar i{border-radius:1px;width:3px;height:12px;background:repeating-linear-gradient(var(--coral),var(--coral) 2px,transparent 2px,transparent 4px)}
+.leg .cond i{background:transparent;border:1px dashed var(--faint);border-radius:2px}
+
+/* TOC strip */
+.toc{display:grid;grid-template-columns:repeat(3,1fr);gap:.8rem;margin-top:2.2rem}
+.toc a{
+  display:flex;flex-direction:column;gap:.25rem;
+  background:var(--panel2);border:1px solid var(--line);border-radius:10px;
+  padding:1rem 1.1rem;transition:transform .2s,border-color .2s;
+}
+.toc a:hover{transform:translateY(-3px);border-color:var(--amber);text-decoration:none}
+.toc .tn{font-family:var(--mono);font-size:.82rem;font-weight:600;color:var(--amber)}
+.toc .ts{font-size:.78rem;color:var(--muted)}
+.toc .tp{font-family:var(--mono);font-size:.62rem;color:var(--faint);margin-top:.2rem}
+.toc .tp i{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:.25rem;vertical-align:0}
+.toc .tp i.a{background:var(--amber)}.toc .tp i.c{background:var(--cyan)}.toc .tp i.o{background:var(--coral)}
+
+/* workflow section */
+.wfhead{display:flex;align-items:baseline;gap:.9rem;flex-wrap:wrap;margin-bottom:.4rem}
+.wfhead h2{margin-bottom:0}
+.badge{
+  font-family:var(--mono);font-size:.58rem;letter-spacing:.1em;text-transform:uppercase;
+  padding:.2rem .55rem;border-radius:99px;border:1px solid var(--line2);color:var(--faint);white-space:nowrap;
+}
+.badge.multi{border-color:rgba(199,146,234,.5);color:var(--violet)}
+.cmd{
+  font-family:var(--mono);font-size:.7rem;color:var(--cyan);background:var(--bg2);
+  border:1px solid var(--line);border-radius:7px;padding:.55rem .8rem;
+  overflow-x:auto;white-space:nowrap;margin-bottom:1.2rem;max-width:100%;
+}
+.cmd::before{content:'$ ';color:var(--faint)}
+
+/* flow diagram */
+.flowpanel{
+  background:var(--panel2);border:1px solid var(--line);border-radius:12px;
+  padding:1.1rem 1.2rem 1.2rem;box-shadow:0 24px 60px -28px rgba(0,0,0,.65);
+}
+.fctrl{display:flex;align-items:center;gap:.9rem;flex-wrap:wrap;margin-bottom:.4rem}
+.btn{
+  font-family:var(--mono);font-size:.72rem;font-weight:600;letter-spacing:.06em;
+  background:var(--amber);color:#181104;border:none;border-radius:7px;
+  padding:.45rem 1rem;cursor:pointer;transition:transform .12s,box-shadow .2s;
+}
+.btn:hover{transform:translateY(-1px);box-shadow:0 6px 22px -6px rgba(255,180,84,.5)}
+.btn[disabled]{opacity:.45;cursor:default;transform:none;box-shadow:none}
+.stepbadge{font-family:var(--mono);font-size:.68rem;color:var(--faint)}
+.lanes-toggle{display:flex;gap:.4rem;margin-left:auto}
+.lanes-toggle button{
+  font-family:var(--mono);font-size:.66rem;padding:.35rem .7rem;cursor:pointer;
+  background:transparent;border:1px solid var(--line2);border-radius:99px;color:var(--muted);transition:all .15s;
+}
+.lanes-toggle button.on{background:var(--amber);border-color:var(--amber);color:#181104;font-weight:600}
+
+.flowscroll{overflow-x:auto;padding-bottom:.3rem}
+.flowrow{display:flex;align-items:center;min-width:max-content;padding:1.7rem .3rem 1rem}
+.fstage{
+  display:flex;flex-direction:column;gap:.45rem;position:relative;
+  padding-top:1.15rem;min-width:128px;cursor:pointer;transition:opacity .35s;
+}
+.fstage .stitle{
+  position:absolute;top:-3px;left:1px;font-family:var(--mono);font-size:.6rem;
+  letter-spacing:.16em;text-transform:uppercase;color:var(--faint);white-space:nowrap;
+}
+.fstage .stitle i{font-style:normal;color:var(--violet);text-transform:none;letter-spacing:0}
+.fnode{
+  position:relative;border:1px solid var(--line2);border-radius:8px;background:var(--panel);
+  padding:.5rem .7rem;font-family:var(--mono);font-size:.66rem;color:var(--ink);
+  white-space:nowrap;transition:border-color .3s,box-shadow .3s;
+}
+.fnode .dot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:.45rem;vertical-align:0}
+.fnode .dot.run{background:var(--amber)}
+.fnode .dot.codex{background:var(--cyan)}
+.fnode .dot.claude{background:var(--coral)}
+.fnode .dot.js{background:transparent;border:1px solid var(--faint);border-radius:2px}
+.fnode .x{color:var(--amber);font-size:.6rem;margin-left:.3rem}
+.fnode.stack{box-shadow:5px 5px 0 -1px var(--panel2),5px 5px 0 0 var(--line2);margin-right:5px;margin-bottom:5px}
+.fnode.decision{border-radius:99px;border-color:rgba(199,146,234,.55)}
+.fnode.decision .dot{display:none}
+.fnode.decision::before{content:'? ';color:var(--violet);font-weight:600}
+.fnode.result{border-color:rgba(135,217,108,.5);color:var(--green)}
+.fnode.result .dot{display:none}
+.fnode.result::before{content:'→ ';color:var(--green)}
+.fstage.cond .fnode{border-style:dashed}
+/* connectors */
+.fconn{width:30px;height:1px;background:var(--line2);position:relative;flex-shrink:0;margin:0 3px}
+.fconn::after{
+  content:'';position:absolute;right:-1px;top:-3.5px;
+  border-left:6px solid var(--line2);border-top:4px solid transparent;border-bottom:4px solid transparent;
+}
+.fconn .cfill{position:absolute;inset:0;background:var(--amber);transform:scaleX(0);transform-origin:left;transition:transform .4s}
+.fconn.on .cfill{transform:scaleX(1)}
+.fconn.on::after{border-left-color:var(--amber)}
+/* barrier */
+.fbarrier{
+  position:relative;width:0;align-self:stretch;min-height:88px;
+  border-left:2px dashed var(--coral);margin:0 12px;flex-shrink:0;cursor:pointer;
+  opacity:.8;transition:opacity .35s,filter .3s;
+}
+.fbarrier::before{
+  content:'BARRIER';position:absolute;top:-15px;left:50%;transform:translateX(-50%);
+  font-family:var(--mono);font-size:.55rem;letter-spacing:.18em;color:var(--coral);
+}
+.fbarrier::after{
+  content:attr(data-lbl);position:absolute;bottom:-15px;left:50%;transform:translateX(-50%);
+  font-family:var(--mono);font-size:.56rem;color:var(--faint);white-space:nowrap;
+}
+/* loop group */
+.floop{
+  display:flex;align-items:center;position:relative;flex-shrink:0;
+  border:1px dashed rgba(199,146,234,.5);border-radius:12px;
+  padding:1.5rem .8rem .9rem;margin:0 4px;
+}
+.floop::before{
+  content:'↻ 'attr(data-lbl);position:absolute;top:-9px;left:12px;
+  font-family:var(--mono);font-size:.58rem;letter-spacing:.12em;color:var(--violet);
+  background:var(--panel2);padding:0 .5rem;
+}
+/* branch lanes */
+.fbranch{display:flex;flex-direction:column;gap:.9rem;flex-shrink:0;margin-left:4px}
+.flane{
+  display:flex;align-items:center;position:relative;
+  border:1px dashed var(--line2);border-radius:12px;
+  padding:1.4rem .9rem .8rem;transition:opacity .35s,border-color .35s;
+}
+.flane::before{
+  content:attr(data-lbl);position:absolute;top:-9px;left:12px;
+  font-family:var(--mono);font-size:.58rem;letter-spacing:.12em;color:var(--muted);
+  background:var(--panel2);padding:0 .5rem;
+}
+.flane.sel{border-color:rgba(255,180,84,.45)}
+.flane.sel::before{color:var(--amber)}
+/* trace states */
+.flowpanel.playing .fstage,.flowpanel.playing .fbarrier{opacity:.3}
+.flowpanel.playing .fstage.active,.flowpanel.playing .fstage.done,
+.flowpanel.playing .fbarrier.active,.flowpanel.playing .fbarrier.done{opacity:1}
+.fstage.active .fnode{
+  border-color:var(--amber);
+  box-shadow:0 0 0 1px var(--amber),0 0 22px rgba(255,180,84,.28);
+  animation:nodepulse .9s ease-in-out infinite;
+}
+@keyframes nodepulse{0%,100%{box-shadow:0 0 0 1px var(--amber),0 0 14px rgba(255,180,84,.2)}50%{box-shadow:0 0 0 1px var(--amber),0 0 26px rgba(255,180,84,.45)}}
+.fstage.done .stitle{color:var(--green)}
+.fstage.done .stitle::after{content:' ✓'}
+.fbarrier.active{filter:drop-shadow(0 0 8px rgba(255,143,115,.8));opacity:1}
+.flowpanel.playing .flane.dimmed{opacity:.18}
+/* caption */
+.fcap{
+  display:flex;gap:.8rem;align-items:baseline;
+  border-top:1px solid var(--line);padding-top:.8rem;min-height:3.4em;
+}
+.fcap .n{font-family:var(--mono);font-size:.66rem;color:var(--amber);white-space:nowrap}
+.fcap .t{font-size:.88rem;color:var(--muted)}
+.fcap .t strong{color:var(--ink);font-weight:500}
+
+/* notes */
+.notes{margin-top:1.1rem;display:flex;flex-direction:column;gap:.35rem;max-width:52rem}
+.notes li{
+  list-style:none;font-size:.88rem;color:var(--muted);padding-left:1.1rem;position:relative;
+}
+.notes li::before{content:'▸';position:absolute;left:0;color:var(--amber);font-size:.7rem;top:.2em}
+.notes li b{color:var(--ink);font-weight:500}
+
+footer{
+  margin-top:5rem;padding:2.5rem 0 3rem;border-top:1px solid var(--line);
+  font-family:var(--mono);font-size:.7rem;color:var(--faint);
+  display:flex;justify-content:space-between;gap:1rem;flex-wrap:wrap;
+}
+footer .om{color:var(--amber)}
+
+@media (max-width:920px){
+  .toc{grid-template-columns:1fr 1fr}
+}
+@media (max-width:600px){
+  .toc{grid-template-columns:1fr}
+  nav .links{display:none}
+}
+</style>
+</head>
+<body>
+
+<nav>
+  <span class="mark">omegacode</span>
+  <div class="links">
+    <a href="#deep-research">deep-research</a>
+    <a href="#code-review">code-review</a>
+    <a href="#multi-provider-review">multi-provider-review</a>
+    <a href="#bake-off">bake-off</a>
+    <a href="#provider-debate">provider-debate</a>
+    <a href="#second-opinion">second-opinion</a>
+  </div>
+  <a class="back" href="index.html">← the explainer</a>
+</nav>
+
+<div class="wrap">
+
+<header class="hero">
+  <h1><span class="l1">The built-in six,</span><span class="l2">traced end to end.</span></h1>
+  <p class="sub">Every workflow that ships with omegacode, drawn as the flow it actually executes. <strong>Each diagram traces itself</strong> as you reach it — or hit <strong>▶ trace</strong> to replay, and click any step to inspect it. Run any of them by bare name: <code>omegacode run &lt;name&gt;</code> resolves project → user → built-in.</p>
+  <div class="leg">
+    <span class="run"><i></i>run's provider (unpinned)</span>
+    <span class="cx"><i></i>pinned codex</span>
+    <span class="cl"><i></i>pinned claude-code</span>
+    <span class="bar"><i></i>barrier (everyone waits)</span>
+    <span class="cond"><i></i>dashed = conditional</span>
+  </div>
+  <div class="toc" id="toc"></div>
+</header>
+
+<div id="sections"></div>
+
+<footer>
+  <span><span class="om">Ω omegacode</span> — built-in workflow field guide</span>
+  <span><a href="index.html">how workflows work →</a></span>
+</footer>
+
+</div>
+
+<script>
+document.documentElement.classList.add('js');
+function esc(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
+
+/* ───────────── workflow flow data ─────────────
+   node.p: run | codex | claude | js   stage types: stage | barrier | loop | branch */
+const WORKFLOWS=[
+{
+ id:'deep-research', name:'deep-research', badge:'claude code port', num:'01',
+ shape:'sweep → verify → cite', prov:['a'],
+ tagline:'Multi-source web research with adversarial fact-checking and a fully cited report.',
+ cmd:'omegacode run deep-research --args \'"<question>"\'',
+ flow:[
+  {type:'stage',t:'Scope',nodes:[{l:'scope question',p:'run'}],
+   cap:'<strong>Scope.</strong> One agent reads the raw question and breaks it into sub-questions and search angles — what a good answer would need to cover.'},
+  {type:'stage',t:'Search',nodes:[{l:'web search',p:'run',x:'×5',stack:1}],
+   cap:'<strong>Search ×5.</strong> Five searchers fan out in parallel, each working a different angle, blind to what the others surface.'},
+  {type:'barrier',lbl:'dedup needs all results',
+   cap:'<strong>Barrier — and an earned one.</strong> Deduping the source list requires seeing every search’s results together. This is exactly the case where a barrier is correct.'},
+  {type:'stage',t:'Fetch',nodes:[{l:'fetch + deep-read',p:'run',x:'× top src',stack:1}],
+   cap:'<strong>Fetch.</strong> The top deduped sources are fetched and deep-read in parallel, one reader per source.'},
+  {type:'stage',t:'Verify',nodes:[{l:'try to refute claim',p:'run',x:'×3 / claim',stack:1}],
+   cap:'<strong>Adversarial verify.</strong> Every extracted claim faces a 3-vote panel of skeptics prompted to refute it. Only majority-survivors make the report.'},
+  {type:'stage',t:'Report',nodes:[{l:'cited report',p:'run',kind:'result'}],
+   cap:'<strong>Synthesize.</strong> A final agent writes the report from verified claims only — each one cited back to its source.'},
+ ],
+ notes:[
+  '<b>Args:</b> the bare question string — <code>--args \'"How do CRDTs handle tombstones?"\'</code>.',
+  '<b>Providers:</b> nothing is pinned; every agent inherits the run’s <code>--provider</code> (default codex).',
+  '<b>Why the shape:</b> search angles are blind to each other (multi-modal sweep), and no claim ships without surviving refutation.',
+ ],
+},
+{
+ id:'code-review', name:'code-review', badge:'claude code port', num:'02',
+ shape:'find → verify → rank', prov:['a'],
+ tagline:'One finder per review angle, an independent verdict per finding, a gap-sweep at the top levels.',
+ cmd:'omegacode run code-review --args \'{"target": "...", "level": "high|xhigh|max"}\'',
+ flow:[
+  {type:'stage',t:'Find',nodes:[{l:'finder per angle',p:'run',x:'× angle',stack:1}],
+   cap:'<strong>Find.</strong> One finder per review angle — correctness, security, performance, and so on — all reading the target diff in parallel.'},
+  {type:'stage',t:'Verify',nodes:[{l:'independent verifier',p:'run',x:'× finding',stack:1}],
+   cap:'<strong>Verify, no barrier.</strong> Each finding gets its own independent verifier the moment it lands (pipeline-style): the verdict is CONFIRMED, PLAUSIBLE, or REFUTED. Bug findings verify while the perf finder is still reading.'},
+  {type:'stage',t:'Gap-sweep',cond:'xhigh / max only',nodes:[{l:'what did everyone miss?',p:'run'}],
+   cap:'<strong>Gap-sweep (conditional).</strong> At level xhigh or max, a completeness critic hunts for what every finder missed. Lower levels skip it.'},
+  {type:'stage',t:'Report',nodes:[{l:'ranked report',p:'run',kind:'result'}],
+   cap:'<strong>Rank.</strong> Confirmed findings ranked first, plausible flagged, refuted dropped — one ranked report.'},
+ ],
+ notes:[
+  '<b>Args:</b> <code>{"target": "...", "level": "high|xhigh|max"}</code> — level scales the finder pool and gates the gap-sweep.',
+  '<b>Verdict taxonomy:</b> CONFIRMED / PLAUSIBLE / REFUTED — adversarial verification kills the plausible-but-wrong.',
+  '<b>Providers:</b> unpinned; the whole review runs on the invoking <code>--provider</code>.',
+ ],
+},
+{
+ id:'multi-provider-review', name:'multi-provider-review', badge:'multi-provider original', num:'03',
+ shape:'two blind reviews → merge', prov:['c','o'],
+ tagline:'Codex and Claude review the same branch independently — decorrelated errors are the point.',
+ cmd:'omegacode run multi-provider-review --args \'{"target": "..."}\'',
+ flow:[
+  {type:'stage',t:'Review ×2',nodes:[{l:'full review',p:'codex'},{l:'full review',p:'claude'}],
+   cap:'<strong>Dual blind review.</strong> Codex and Claude each review the <em>entire</em> feature or branch — identical prompts, blind to each other. Two models, two decorrelated error profiles.'},
+  {type:'barrier',lbl:'synthesis needs both',
+   cap:'<strong>Barrier.</strong> The merge can’t start until both reviews exist — consensus and disagreement are cross-review properties.'},
+  {type:'stage',t:'Synthesize',nodes:[{l:'merge both reviews',p:'run'}],
+   cap:'<strong>Merge.</strong> A synthesis agent combines both: consensus findings ranked first, unique catches attributed to the provider that made them, disagreements called out explicitly.'},
+  {type:'stage',t:'Report',nodes:[{l:'merged report',p:'run',kind:'result'}],
+   cap:'<strong>Result.</strong> One report where "both models flagged this" carries more weight than any single finding.'},
+ ],
+ notes:[
+  '<b>Target:</b> defaults to the current branch vs its merge-base with the default branch.',
+  '<b>Why two providers:</b> when independent models agree, confidence compounds; when they disagree, that disagreement is itself a finding.',
+ ],
+},
+{
+ id:'bake-off', name:'bake-off', badge:'multi-provider original', num:'04',
+ shape:'build ×2 → blind judges', prov:['c','o'],
+ tagline:'Both providers implement the same task; blind A/B judges pick a winner and name what to graft from the loser.',
+ cmd:'omegacode run bake-off --args \'"<task>"\'',
+ flow:[
+  {type:'stage',t:'Build ×2',nodes:[{l:'implement · worktree A',p:'codex'},{l:'implement · worktree B',p:'claude'}],
+   cap:'<strong>Build.</strong> Codex and Claude implement the same task in isolated git worktrees — no interference, and only <em>committed</em> work counts toward judging.'},
+  {type:'barrier',lbl:'judging needs both diffs',
+   cap:'<strong>Barrier.</strong> A/B judging is meaningless until both implementations exist.'},
+  {type:'stage',t:'Judge',nodes:[{l:'blind A/B judge',p:'codex'},{l:'blind A/B judge',p:'claude'}],
+   cap:'<strong>Blind judging.</strong> Judges drawn from <em>both</em> providers score the two diffs — labeled A and B, neither judge knows which model wrote which.'},
+  {type:'stage',t:'Tie-break',cond:'if judges split',nodes:[{l:'settle the split',p:'run'}],
+   cap:'<strong>Tie-break (conditional).</strong> If the judges split, one more agent settles it.'},
+  {type:'stage',t:'Report',nodes:[{l:'winner + graft list',p:'run',kind:'result'}],
+   cap:'<strong>Result.</strong> The report names a winner — and what to graft from the loser. Both branches are preserved, so nothing is thrown away.'},
+ ],
+ notes:[
+  '<b>Args:</b> the task as a bare string.',
+  '<b>Worktrees:</b> each builder gets a fresh isolated worktree; committed work only.',
+  '<b>Both branches preserved</b> — the "loser" often has the better test suite or edge-case handling worth grafting.',
+ ],
+},
+{
+ id:'provider-debate', name:'provider-debate', badge:'multi-provider original', num:'05',
+ shape:'propose → attack ↻ → rule', prov:['c','o'],
+ tagline:'One provider proposes, the other attacks, rounds of rebuttal — then a judge rules.',
+ cmd:'omegacode run provider-debate --args \'"<question>"\'',
+ flow:[
+  {type:'stage',t:'Propose',nodes:[{l:'proposer',p:'codex'}],
+   cap:'<strong>Propose.</strong> The proposer (configurable via <code>{"proposer": "..."}</code>) lays out a position with its full reasoning.'},
+  {type:'loop',lbl:'× rounds (default shown: 2)',rounds:2,stages:[
+    {type:'stage',t:'Attack',nodes:[{l:'opponent attacks',p:'claude'}],
+     cap:'<strong>Attack.</strong> The opposing provider goes after the proposal — weaknesses, unstated assumptions, counterexamples.'},
+    {type:'stage',t:'Rebut',nodes:[{l:'proposer rebuts',p:'codex'}],
+     cap:'<strong>Rebut.</strong> The proposer answers the attack: defends what it can, concedes what it must.'},
+  ]},
+  {type:'stage',t:'Judge',nodes:[{l:'judge rules',p:'run',kind:'result'}],
+   cap:'<strong>Ruling.</strong> A judge reads the full exchange and rules: a recommendation, the points that survived, the points conceded, and the questions still open.'},
+ ],
+ notes:[
+  '<b>Args:</b> a bare question, or <code>{"question": "...", "rounds": 2, "proposer": "codex"}</code> to set depth and who opens.',
+  '<b>Why a debate:</b> sustained adversarial pressure across rounds surfaces weaknesses a single critique pass misses.',
+ ],
+},
+{
+ id:'second-opinion', name:'second-opinion', badge:'multi-provider original', num:'06',
+ shape:'cheap ×2 → escalate on split', prov:['c','o'],
+ tagline:'Both providers answer cheap; only disagreement buys the expensive escalation.',
+ cmd:'omegacode run second-opinion --args \'"<question>"\'',
+ hasLanes:true,
+ flow:[
+  {type:'stage',t:'Answer ×2',nodes:[{l:'answer · low effort',p:'codex'},{l:'answer · low effort',p:'claude'}],
+   cap:'<strong>Cheap first pass.</strong> Both providers answer the question independently at <code>low</code> effort.'},
+  {type:'stage',t:'Compare',nodes:[{l:'do they agree?',p:'js',kind:'decision'}],
+   cap:'<strong>The fork.</strong> Agreement is the cheap exit; disagreement is the signal that the question deserves real spend.'},
+  {type:'branch',lanes:[
+   {id:'agree',lbl:'AGREE — cheap exit',stages:[
+    {type:'stage',t:'Merge',nodes:[{l:'merged answer',p:'run',kind:'result'}],
+     cap:'<strong>Agree → done.</strong> The merged answer returns immediately. Total cost: two low-effort calls.'},
+   ]},
+   {id:'disagree',lbl:'DISAGREE — escalate',stages:[
+    {type:'stage',t:'Escalate ×2',nodes:[{l:'re-answer · xhigh',p:'codex'},{l:'re-answer · xhigh',p:'claude'}],
+     cap:'<strong>Escalate.</strong> Both providers re-answer at <code>xhigh</code> effort — each with the <em>other’s</em> answer in hand, forced to engage with the disagreement.'},
+    {type:'stage',t:'Adjudicate',nodes:[{l:'adjudicator decides',p:'run',kind:'result'}],
+     cap:'<strong>Adjudicate.</strong> A final agent reads both escalated answers and decides.'},
+   ]},
+  ]},
+ ],
+ notes:[
+  '<b>Args:</b> the bare question string.',
+  '<b>The economics:</b> agreement between two independent cheap answers is strong evidence — you only pay xhigh prices when the models actually disagree.',
+  '<b>Toggle the trace</b> above the diagram to follow either path.',
+ ],
+},
+];
+
+/* ───────────── TOC ───────────── */
+(function(){
+  const toc=document.getElementById('toc');
+  WORKFLOWS.forEach(w=>{
+    const a=document.createElement('a');a.href='#'+w.id;
+    const dots=w.prov.map(p=>'<i class="'+p+'"></i>').join('');
+    a.innerHTML='<span class="tn">'+w.num+' · '+w.name+'</span><span class="ts">'+w.shape+'</span><span class="tp">'+dots+(w.prov.length>1?'codex + claude':'run’s provider')+'</span>';
+    toc.appendChild(a);
+  });
+})();
+
+/* ───────────── diagram builder ───────────── */
+function el(tag,cls){const d=document.createElement(tag);if(cls)d.className=cls;return d}
+
+function stageEl(item){
+  const s=el('div','fstage'+(item.cond?' cond':''));
+  s.innerHTML='<span class="stitle">'+esc(item.t)+(item.cond?' <i>· '+esc(item.cond)+'</i>':'')+'</span>';
+  item.nodes.forEach(n=>{
+    const nd=el('div','fnode'+(n.kind?' '+n.kind:'')+(n.stack?' stack':''));
+    nd.innerHTML='<span class="dot '+(n.p||'run')+'"></span>'+esc(n.l)+(n.x?'<span class="x">'+esc(n.x)+'</span>':'');
+    s.appendChild(nd);
+  });
+  return s;
+}
+function connEl(parent){
+  const c=el('div','fconn');c.innerHTML='<div class="cfill"></div>';
+  parent.appendChild(c);return c;
+}
+/* builds DOM into parent; returns ordered trace units:
+   {els, conns, cap}  |  {loop, units, rounds}  |  {branch:lanesData} */
+function buildSeq(items,parent,capClick){
+  const units=[];
+  items.forEach(item=>{
+    const conn=parent.childElementCount>0?connEl(parent):null;
+    if(item.type==='barrier'){
+      const b=el('div','fbarrier');b.dataset.lbl=item.lbl;
+      parent.appendChild(b);
+      b.addEventListener('click',()=>capClick(item.cap));
+      units.push({els:[b],conns:conn?[conn]:[],cap:item.cap});
+    }else if(item.type==='loop'){
+      const box=el('div','floop');box.dataset.lbl=item.lbl;
+      parent.appendChild(box);
+      const inner=buildSeq(item.stages,box,capClick);
+      if(conn)inner[0]&&inner[0].conns.unshift(conn);
+      units.push({loop:true,units:inner,rounds:item.rounds||2});
+    }else if(item.type==='branch'){
+      const wrap=el('div','fbranch');
+      const lanes=item.lanes.map(l=>{
+        const laneEl=el('div','flane');laneEl.dataset.lbl=l.lbl;
+        wrap.appendChild(laneEl);
+        const lu=buildSeq(l.stages,laneEl,capClick);
+        return{id:l.id,el:laneEl,units:lu};
+      });
+      parent.appendChild(wrap);
+      units.push({branch:lanes,conns:conn?[conn]:[]});
+    }else{
+      const s=stageEl(item);
+      parent.appendChild(s);
+      s.addEventListener('click',()=>capClick(item.cap));
+      units.push({els:[s],conns:conn?[conn]:[],cap:item.cap});
+    }
+  });
+  return units;
+}
+/* flatten units into linear steps for the chosen lane */
+function flatten(units,lane){
+  const steps=[];
+  units.forEach(u=>{
+    if(u.loop){
+      for(let r=1;r<=u.rounds;r++)
+        flatten(u.units,lane).forEach(s=>steps.push({...s,cap:'<strong>round '+r+'/'+u.rounds+'</strong> — '+s.cap.replace(/<strong>|<\/strong>/g,'')}));
+    }else if(u.branch){
+      const sel=u.branch.find(l=>l.id===lane)||u.branch[0];
+      const inner=flatten(sel.units,lane);
+      if(inner[0])inner[0].conns=[...u.conns,...inner[0].conns];
+      steps.push(...inner);
+    }else steps.push({els:u.els,conns:u.conns,cap:u.cap});
+  });
+  return steps;
+}
+
+/* ───────────── sections ───────────── */
+const host=document.getElementById('sections');
+WORKFLOWS.forEach(wf=>{
+  const sec=el('section');sec.id=wf.id;
+  sec.innerHTML=
+    '<div class="kicker rv">'+wf.num+' / '+(wf.badge.indexOf('multi')===0?'multi-provider':'port')+'</div>'+
+    '<div class="wfhead rv"><h2><em>'+wf.name+'</em></h2><span class="badge'+(wf.badge.indexOf('multi')===0?' multi':'')+'">'+wf.badge+'</span></div>'+
+    '<p class="lede rv" style="margin-bottom:1rem">'+wf.tagline+'</p>'+
+    '<div class="cmd rv">'+esc(wf.cmd)+'</div>';
+  const panel=el('div','flowpanel rv');
+  const ctrl=el('div','fctrl');
+  const btn=el('button','btn');btn.textContent='▶ TRACE';
+  const badge=el('span','stepbadge');
+  ctrl.appendChild(btn);ctrl.appendChild(badge);
+  let laneSel='disagree';
+  if(wf.hasLanes){
+    const lt=el('div','lanes-toggle');
+    [['agree','agree path'],['disagree','disagree path']].forEach(([id,lbl])=>{
+      const b=el('button');b.textContent=lbl;b.dataset.lane=id;
+      if(id===laneSel)b.classList.add('on');
+      b.addEventListener('click',()=>{
+        laneSel=id;
+        lt.querySelectorAll('button').forEach(x=>x.classList.toggle('on',x.dataset.lane===id));
+        play();
+      });
+      lt.appendChild(b);
+    });
+    ctrl.appendChild(lt);
+  }
+  panel.appendChild(ctrl);
+  const scroll=el('div','flowscroll');
+  const row=el('div','flowrow');
+  scroll.appendChild(row);panel.appendChild(scroll);
+  const cap=el('div','fcap');
+  cap.innerHTML='<span class="n">·</span><span class="t">Click any step to inspect it, or ▶ trace the run.</span>';
+  panel.appendChild(cap);
+  sec.appendChild(panel);
+  const notes=el('ul','notes rv');
+  notes.innerHTML=wf.notes.map(n=>'<li>'+n+'</li>').join('');
+  sec.appendChild(notes);
+  host.appendChild(sec);
+
+  const setCap=(txt,n)=>{
+    cap.querySelector('.n').textContent=n||'·';
+    cap.querySelector('.t').innerHTML=txt;
+  };
+  const units=buildSeq(wf.flow,row,t=>setCap(t));
+
+  let timer=null;
+  function resetVisual(){
+    panel.querySelectorAll('.fstage,.fbarrier').forEach(x=>x.classList.remove('active','done'));
+    panel.querySelectorAll('.fconn').forEach(x=>x.classList.remove('on'));
+    panel.querySelectorAll('.flane').forEach(x=>x.classList.remove('dimmed','sel'));
+  }
+  function play(){
+    if(timer)clearTimeout(timer);
+    resetVisual();
+    panel.classList.add('playing');
+    btn.disabled=true;
+    /* lane highlighting */
+    units.forEach(u=>{if(u.branch)u.branch.forEach(l=>{
+      l.el.classList.toggle('sel',l.id===laneSel||(!wf.hasLanes));
+      l.el.classList.toggle('dimmed',wf.hasLanes&&l.id!==laneSel);
+    })});
+    const steps=flatten(units,laneSel);
+    let i=0;
+    (function next(){
+      if(i>0){
+        steps[i-1].els.forEach(e=>{e.classList.remove('active');e.classList.add('done')});
+      }
+      if(i>=steps.length){
+        panel.classList.remove('playing');
+        btn.disabled=false;btn.textContent='↺ RETRACE';
+        setCap('<strong>Run complete.</strong> '+steps.length+' steps traced. Click any step to revisit it.', '✓');
+        return;
+      }
+      const s=steps[i];
+      s.conns.forEach(c=>c.classList.add('on'));
+      s.els.forEach(e=>{e.classList.remove('done');e.classList.add('active')});
+      setCap(s.cap,(i+1)+'/'+steps.length);
+      i++;
+      timer=setTimeout(next,1250);
+    })();
+  }
+  btn.addEventListener('click',play);
+  const io2=new IntersectionObserver(es=>{
+    if(es[0].isIntersecting){io2.disconnect();setTimeout(play,350)}
+  },{threshold:.35});
+  io2.observe(panel);
+});
+
+/* scroll reveal */
+const io=new IntersectionObserver(es=>es.forEach(e=>{
+  if(e.isIntersecting){e.target.classList.add('in');io.unobserve(e.target)}
+}),{threshold:.12});
+document.querySelectorAll('.rv').forEach(x=>io.observe(x));
+</script>
+</body>
+</html>
