@@ -1,0 +1,1182 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>omegacode — how workflows work</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Schibsted+Grotesk:ital,wght@0,400;0,500;0,700;1,400&family=IBM+Plex+Mono:ital,wght@0,400;0,500;0,600;1,400&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#0a0d14;
+  --bg2:#0d111c;
+  --panel:#11172a;
+  --panel2:#0e1322;
+  --line:#222b44;
+  --line2:#2c3756;
+  --ink:#e9e4d6;
+  --muted:#929aae;
+  --faint:#5d6579;
+  --amber:#ffb454;
+  --amber-dim:rgba(255,180,84,.14);
+  --cyan:#5ccfe6;
+  --cyan-dim:rgba(92,207,230,.13);
+  --coral:#ff8f73;
+  --coral-dim:rgba(255,143,115,.13);
+  --violet:#c792ea;
+  --green:#87d96c;
+  --green-dim:rgba(135,217,108,.12);
+  --red:#f25f6c;
+  --mono:'IBM Plex Mono',ui-monospace,monospace;
+  --serif:'Instrument Serif',Georgia,serif;
+  --sans:'Schibsted Grotesk',sans-serif;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{scroll-behavior:smooth}
+body{
+  background:var(--bg);
+  color:var(--ink);
+  font-family:var(--sans);
+  font-size:16px;
+  line-height:1.6;
+  overflow-x:hidden;
+}
+/* layered atmosphere: glows + grid + grain */
+body::before{
+  content:'';position:fixed;inset:0;z-index:-2;pointer-events:none;
+  background:
+    radial-gradient(900px 600px at 12% -8%, rgba(255,180,84,.07), transparent 60%),
+    radial-gradient(1000px 700px at 95% 15%, rgba(92,207,230,.06), transparent 60%),
+    radial-gradient(800px 800px at 50% 110%, rgba(255,143,115,.05), transparent 55%),
+    linear-gradient(rgba(34,43,68,.32) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(34,43,68,.32) 1px, transparent 1px);
+  background-size:auto,auto,auto,56px 56px,56px 56px;
+}
+body::after{
+  content:'';position:fixed;inset:0;z-index:-1;pointer-events:none;opacity:.05;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+::selection{background:var(--amber);color:#181104}
+a{color:var(--cyan);text-decoration:none}
+a:hover{text-decoration:underline}
+code,pre,kbd{font-family:var(--mono)}
+
+/* ---------- nav ---------- */
+nav{
+  position:fixed;top:0;left:0;right:0;z-index:50;
+  display:flex;align-items:center;gap:1.4rem;
+  padding:.65rem 1.4rem;
+  background:rgba(10,13,20,.82);backdrop-filter:blur(12px);
+  border-bottom:1px solid var(--line);
+  font-family:var(--mono);font-size:.72rem;
+}
+nav .mark{color:var(--amber);font-weight:600;letter-spacing:.04em;white-space:nowrap}
+nav .mark::before{content:'Ω ';color:var(--cyan)}
+nav .links{display:flex;gap:1.1rem;overflow-x:auto;scrollbar-width:none}
+nav .links::-webkit-scrollbar{display:none}
+nav .links a{color:var(--muted);white-space:nowrap;transition:color .15s}
+nav .links a:hover{color:var(--amber);text-decoration:none}
+
+/* ---------- layout ---------- */
+.wrap{max-width:1120px;margin:0 auto;padding:0 1.4rem}
+section{padding:5.5rem 0 1rem;scroll-margin-top:64px}
+.kicker{
+  font-family:var(--mono);font-size:.72rem;letter-spacing:.22em;
+  color:var(--amber);text-transform:uppercase;margin-bottom:.9rem;
+}
+.kicker::before{content:'';display:inline-block;width:26px;height:1px;background:var(--amber);vertical-align:middle;margin-right:.7rem}
+h2{
+  font-family:var(--serif);font-weight:400;font-size:clamp(2rem,4.4vw,3rem);
+  line-height:1.08;margin-bottom:1rem;letter-spacing:.01em;
+}
+h2 em{font-style:italic;color:var(--amber)}
+.lede{color:var(--muted);max-width:46rem;font-size:1.04rem;margin-bottom:2.2rem}
+.lede code, p code, li code, td code{
+  background:rgba(255,180,84,.09);border:1px solid rgba(255,180,84,.18);
+  border-radius:4px;padding:.06em .34em;font-size:.86em;color:var(--amber);white-space:nowrap;
+}
+
+/* scroll reveal */
+.js .rv{opacity:0;transform:translateY(22px);transition:opacity .7s ease,transform .7s cubic-bezier(.2,.7,.2,1)}
+.js .rv.in{opacity:1;transform:none}
+
+/* ---------- hero ---------- */
+header.hero{
+  min-height:92vh;display:flex;flex-direction:column;justify-content:center;
+  padding:7rem 0 3rem;position:relative;
+}
+.hero .cmd{
+  font-family:var(--mono);font-size:.82rem;color:var(--cyan);margin-bottom:1.4rem;
+  opacity:0;animation:rise .8s .1s cubic-bezier(.2,.7,.2,1) forwards;
+}
+.hero .cmd::before{content:'$ ';color:var(--faint)}
+.hero h1{
+  font-family:var(--serif);font-weight:400;
+  font-size:clamp(3rem,8.5vw,6.4rem);line-height:.98;letter-spacing:.005em;
+  max-width:13ch;
+}
+.hero h1 .l1,.hero h1 .l2{display:block;opacity:0;animation:rise .9s cubic-bezier(.2,.7,.2,1) forwards}
+.hero h1 .l1{animation-delay:.25s}
+.hero h1 .l2{animation-delay:.42s;color:var(--amber);font-style:italic}
+.hero .sub{
+  margin-top:1.6rem;max-width:42rem;color:var(--muted);font-size:1.1rem;
+  opacity:0;animation:rise .9s .6s cubic-bezier(.2,.7,.2,1) forwards;
+}
+.hero .sub strong{color:var(--ink);font-weight:500}
+@keyframes rise{from{opacity:0;transform:translateY(26px)}to{opacity:1;transform:none}}
+
+.hero-grid{display:grid;grid-template-columns:1.15fr .85fr;gap:2.5rem;align-items:center;margin-top:3rem}
+/* orchestration diagram */
+.orch{opacity:0;animation:rise 1s .8s cubic-bezier(.2,.7,.2,1) forwards}
+.orch svg{width:100%;height:auto;display:block}
+.orch .wire{fill:none;stroke:var(--line2);stroke-width:1.4}
+.orch .flow{
+  fill:none;stroke-width:1.6;stroke-dasharray:5 9;stroke-linecap:round;
+  animation:dashflow 1.6s linear infinite;
+}
+@keyframes dashflow{to{stroke-dashoffset:-28}}
+.orch .nodebox{fill:var(--panel);stroke:var(--line2);stroke-width:1.2;rx:7}
+.orch text{font-family:var(--mono);font-size:11px;fill:var(--muted)}
+.orch text.hot{fill:var(--ink)}
+.orch .pulse{animation:pulse 2.4s ease-in-out infinite}
+@keyframes pulse{0%,100%{opacity:.55}50%{opacity:1}}
+/* terminal mock */
+.term{
+  background:var(--panel2);border:1px solid var(--line);border-radius:10px;
+  font-family:var(--mono);font-size:.78rem;line-height:1.85;
+  box-shadow:0 24px 60px -20px rgba(0,0,0,.7);
+  opacity:0;animation:rise 1s 1s cubic-bezier(.2,.7,.2,1) forwards;
+}
+.term .bar{
+  display:flex;gap:6px;padding:.6rem .9rem;border-bottom:1px solid var(--line);
+}
+.term .bar i{width:10px;height:10px;border-radius:50%;background:var(--line2)}
+.term .bar i:first-child{background:var(--coral)}
+.term .bar i:nth-child(2){background:var(--amber)}
+.term .bar i:nth-child(3){background:var(--green)}
+.term .body{padding:1rem 1.2rem 1.2rem}
+.term .tl{opacity:0;animation:rise .5s forwards;white-space:pre-wrap;word-break:break-all}
+.term .tl:nth-child(1){animation-delay:1.3s}
+.term .tl:nth-child(2){animation-delay:1.7s}
+.term .tl:nth-child(3){animation-delay:2.0s}
+.term .tl:nth-child(4){animation-delay:2.4s}
+.term .tl:nth-child(5){animation-delay:2.7s}
+.term .p{color:var(--faint)}
+.term .c-cy{color:var(--cyan)}.term .c-am{color:var(--amber)}.term .c-gr{color:var(--green)}.term .c-mu{color:var(--muted)}
+.scrollcue{
+  position:absolute;bottom:2rem;left:50%;transform:translateX(-50%);
+  font-family:var(--mono);font-size:.68rem;color:var(--faint);letter-spacing:.2em;
+  animation:bob 2.2s ease-in-out infinite;
+}
+@keyframes bob{0%,100%{transform:translate(-50%,0)}50%{transform:translate(-50%,8px)}}
+
+/* ---------- generic cards ---------- */
+.cards3{display:grid;grid-template-columns:repeat(3,1fr);gap:1rem}
+.card{
+  background:var(--panel2);border:1px solid var(--line);border-radius:10px;
+  padding:1.5rem 1.4rem;position:relative;overflow:hidden;
+  transition:border-color .2s, transform .2s;
+}
+.card:hover{border-color:var(--line2);transform:translateY(-3px)}
+.card .num{font-family:var(--mono);font-size:.7rem;color:var(--faint);letter-spacing:.15em}
+.card h3{font-family:var(--serif);font-weight:400;font-size:1.5rem;margin:.5rem 0 .55rem}
+.card p{color:var(--muted);font-size:.92rem}
+.card .glowbar{position:absolute;top:0;left:0;right:0;height:2px}
+.card.am .glowbar{background:linear-gradient(90deg,var(--amber),transparent)}
+.card.cy .glowbar{background:linear-gradient(90deg,var(--cyan),transparent)}
+.card.co .glowbar{background:linear-gradient(90deg,var(--coral),transparent)}
+.card.am h3 em{color:var(--amber)}.card.cy h3 em{color:var(--cyan)}.card.co h3 em{color:var(--coral)}
+
+/* ---------- code blocks ---------- */
+pre.code{
+  background:var(--panel2);border:1px solid var(--line);border-radius:10px;
+  padding:1.1rem 1.25rem;font-size:.8rem;line-height:1.75;overflow-x:auto;
+  tab-size:2;
+}
+.tk-k{color:var(--coral)}          /* keyword */
+.tk-s{color:var(--green)}          /* string */
+.tk-c{color:var(--faint);font-style:italic} /* comment */
+.tk-f{color:var(--cyan)}           /* function call */
+.tk-n{color:var(--violet)}         /* number */
+
+/* ---------- anatomy ---------- */
+.anatomy{display:grid;grid-template-columns:1.45fr 1fr;gap:1.2rem;align-items:start}
+.anatomy .codepane{
+  background:var(--panel2);border:1px solid var(--line);border-radius:10px;
+  font-family:var(--mono);font-size:.76rem;line-height:1.85;overflow-x:auto;
+  padding:1rem 0;
+}
+.anatomy .line{
+  padding:0 1.2rem 0 .8rem;white-space:pre;cursor:pointer;
+  border-left:3px solid transparent;transition:background .12s,border-color .12s;
+  min-height:1.4em;
+}
+.anatomy .line:hover{background:rgba(255,255,255,.03)}
+.anatomy .line.hl{background:var(--amber-dim);border-left-color:var(--amber)}
+.anatomy .notepane{position:sticky;top:80px}
+.anote{
+  background:var(--panel);border:1px solid var(--line2);border-radius:10px;
+  padding:1.3rem 1.3rem 1.2rem;min-height:230px;
+}
+.anote .tag{
+  font-family:var(--mono);font-size:.7rem;color:var(--amber);
+  letter-spacing:.14em;text-transform:uppercase;
+}
+.anote .tag::before{content:'● ';font-size:.6rem}
+.anote h4{font-family:var(--serif);font-weight:400;font-size:1.45rem;margin:.5rem 0 .6rem}
+.anote p{color:var(--muted);font-size:.9rem}
+.anote-steps{display:flex;flex-wrap:wrap;gap:.4rem;margin-top:1rem}
+.anote-steps button{
+  font-family:var(--mono);font-size:.68rem;padding:.32rem .6rem;cursor:pointer;
+  background:transparent;border:1px solid var(--line2);border-radius:99px;color:var(--muted);
+  transition:all .15s;
+}
+.anote-steps button:hover{color:var(--ink);border-color:var(--amber)}
+.anote-steps button.on{background:var(--amber);border-color:var(--amber);color:#181104;font-weight:600}
+.hintline{font-family:var(--mono);font-size:.7rem;color:var(--faint);margin-top:.8rem}
+
+/* ---------- simulator ---------- */
+.sim{
+  background:var(--panel2);border:1px solid var(--line);border-radius:12px;
+  padding:1.4rem;box-shadow:0 30px 80px -30px rgba(0,0,0,.6);
+}
+.sim-head{display:flex;align-items:center;flex-wrap:wrap;gap:1rem;margin-bottom:1.3rem}
+.btn{
+  font-family:var(--mono);font-size:.78rem;font-weight:600;letter-spacing:.06em;
+  background:var(--amber);color:#181104;border:none;border-radius:7px;
+  padding:.55rem 1.2rem;cursor:pointer;transition:transform .12s, box-shadow .2s;
+}
+.btn:hover{transform:translateY(-1px);box-shadow:0 6px 22px -6px rgba(255,180,84,.5)}
+.btn:active{transform:none}
+.btn[disabled]{opacity:.45;cursor:default;transform:none;box-shadow:none}
+.sim-clock{font-family:var(--mono);font-size:1.05rem;color:var(--ink);min-width:4.8ch}
+.sim-clock span{color:var(--faint);font-size:.75rem}
+.legend{display:flex;gap:1rem;flex-wrap:wrap;margin-left:auto;font-family:var(--mono);font-size:.68rem;color:var(--muted)}
+.legend i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:.35rem;vertical-align:-1px}
+.legend .l1 i{background:var(--amber)}.legend .l2 i{background:var(--cyan)}.legend .l3 i{background:var(--green)}
+.legend .l4 i{background:repeating-linear-gradient(45deg,transparent,transparent 2px,var(--faint) 2px,var(--faint) 3px);border:1px solid var(--line2)}
+.sim-tracks{display:grid;grid-template-columns:1fr 1fr;gap:1.1rem}
+.sim-panel{background:var(--bg2);border:1px solid var(--line);border-radius:9px;padding:1rem 1rem 1.2rem;position:relative}
+.sim-panel h4{font-family:var(--mono);font-size:.78rem;font-weight:600;letter-spacing:.05em;margin-bottom:.15rem}
+.sim-panel h4 .fn{color:var(--cyan)}
+.sim-panel .meta{font-family:var(--mono);font-size:.66rem;color:var(--faint);margin-bottom:.9rem}
+.sim-rows{position:relative}
+.sim-row{display:grid;grid-template-columns:64px 1fr;align-items:center;gap:.6rem;margin-bottom:.55rem}
+.sim-row .lbl{font-family:var(--mono);font-size:.64rem;color:var(--muted);text-align:right}
+.sim-track{position:relative;height:18px;background:rgba(255,255,255,.025);border-radius:4px}
+.seg{position:absolute;top:0;height:100%;border-radius:3px;border:1px solid;overflow:hidden}
+.seg .fill{position:absolute;inset:0;transform-origin:left;transform:scaleX(0)}
+.seg.s0{border-color:rgba(255,180,84,.45)}.seg.s0 .fill{background:var(--amber)}
+.seg.s1{border-color:rgba(92,207,230,.45)}.seg.s1 .fill{background:var(--cyan)}
+.seg.s2{border-color:rgba(135,217,108,.45)}.seg.s2 .fill{background:var(--green)}
+.idle{
+  position:absolute;top:3px;bottom:3px;border-radius:2px;
+  background:repeating-linear-gradient(45deg,transparent,transparent 3px,rgba(146,154,174,.3) 3px,rgba(146,154,174,.3) 4px);
+}
+.playhead{
+  position:absolute;top:-4px;bottom:-2px;width:1px;background:var(--ink);opacity:0;
+  box-shadow:0 0 8px rgba(233,228,214,.8);
+}
+.barrier-line{position:absolute;top:-6px;bottom:-2px;width:0;border-left:1px dashed var(--coral);opacity:.75}
+.barrier-line::after{
+  content:attr(data-lbl);position:absolute;top:-14px;left:-6px;
+  font-family:var(--mono);font-size:.58rem;color:var(--coral);letter-spacing:.04em;
+}
+.axis{display:flex;justify-content:space-between;font-family:var(--mono);font-size:.6rem;color:var(--faint);margin:.5rem 0 0 70px}
+.finish{
+  position:absolute;right:.9rem;top:.9rem;font-family:var(--mono);font-size:.72rem;
+  padding:.25rem .65rem;border-radius:99px;border:1px solid var(--green);color:var(--green);
+  opacity:0;transform:scale(.85);transition:opacity .3s,transform .3s;
+}
+.finish.show{opacity:1;transform:none}
+.sim-verdict{
+  margin-top:1.2rem;padding:.9rem 1.1rem;border-radius:8px;
+  background:var(--green-dim);border:1px solid rgba(135,217,108,.3);
+  font-size:.9rem;color:var(--ink);opacity:0;transform:translateY(8px);transition:all .4s;
+}
+.sim-verdict.show{opacity:1;transform:none}
+.sim-verdict strong{color:var(--green)}
+
+/* ---------- DSL reference ---------- */
+.dsl{display:grid;grid-template-columns:230px 1fr;gap:1.1rem;align-items:start}
+.dsl-list{display:flex;flex-direction:column;gap:.35rem;position:sticky;top:80px}
+.dsl-list button{
+  font-family:var(--mono);font-size:.8rem;text-align:left;cursor:pointer;
+  background:transparent;border:1px solid var(--line);border-radius:8px;
+  color:var(--muted);padding:.6rem .9rem;transition:all .15s;
+}
+.dsl-list button:hover{border-color:var(--line2);color:var(--ink)}
+.dsl-list button.on{background:var(--amber-dim);border-color:var(--amber);color:var(--amber)}
+.dsl-detail{
+  background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:1.5rem;
+  min-height:380px;
+}
+.dsl-detail .sig{
+  font-family:var(--mono);font-size:.85rem;color:var(--amber);
+  padding-bottom:.9rem;border-bottom:1px solid var(--line);margin-bottom:.9rem;
+  word-break:break-word;
+}
+.dsl-detail .desc{color:var(--muted);font-size:.93rem;margin-bottom:1.1rem}
+.dsl-detail .desc strong{color:var(--ink);font-weight:500}
+.dsl-detail pre.code{border-radius:8px}
+
+/* ---------- providers ---------- */
+.prov-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:1rem;margin-bottom:2.5rem}
+.prov{
+  border-radius:10px;padding:1.4rem 1.3rem;border:1px solid var(--line);
+  background:var(--panel2);position:relative;overflow:hidden;
+}
+.prov::before{content:'';position:absolute;top:0;left:0;right:0;height:3px}
+.prov.codex::before{background:var(--cyan)}
+.prov.claude::before{background:var(--coral)}
+.prov.pi::before{background:var(--violet)}
+.prov h3{font-family:var(--mono);font-size:1.05rem;font-weight:600;margin-bottom:.1rem}
+.prov.codex h3{color:var(--cyan)}.prov.claude h3{color:var(--coral)}.prov.pi h3{color:var(--violet)}
+.prov .sub{font-size:.78rem;color:var(--faint);font-family:var(--mono);margin-bottom:.9rem}
+.prov ul{list-style:none;font-size:.85rem;color:var(--muted)}
+.prov li{padding:.4rem 0;border-top:1px solid var(--line)}
+.prov li b{color:var(--ink);font-weight:500}
+.chips{display:flex;flex-wrap:wrap;gap:.35rem;margin-top:.85rem}
+.chip{
+  font-family:var(--mono);font-size:.62rem;padding:.22rem .55rem;border-radius:99px;
+  border:1px solid var(--line2);color:var(--muted);
+}
+.chip.ok{border-color:rgba(135,217,108,.5);color:var(--green)}
+.chip.warn{border-color:rgba(242,95,108,.55);color:var(--red)}
+.chip.def{border-color:rgba(255,180,84,.5);color:var(--amber)}
+/* effort slider */
+.effort{
+  background:var(--panel2);border:1px solid var(--line);border-radius:12px;padding:1.6rem;
+}
+.effort h3{font-family:var(--serif);font-weight:400;font-size:1.5rem;margin-bottom:.3rem}
+.effort .lede{margin-bottom:1.4rem;font-size:.92rem}
+.effort input[type=range]{
+  -webkit-appearance:none;appearance:none;width:100%;height:4px;border-radius:2px;
+  background:linear-gradient(90deg,var(--line2),var(--amber));outline:none;cursor:pointer;
+}
+.effort input[type=range]::-webkit-slider-thumb{
+  -webkit-appearance:none;appearance:none;width:20px;height:20px;border-radius:50%;
+  background:var(--amber);border:3px solid var(--bg);box-shadow:0 0 0 1px var(--amber),0 0 16px rgba(255,180,84,.5);
+}
+.effort input[type=range]::-moz-range-thumb{
+  width:14px;height:14px;border-radius:50%;background:var(--amber);
+  border:3px solid var(--bg);box-shadow:0 0 0 1px var(--amber);
+}
+.effort-stops{display:flex;justify-content:space-between;font-family:var(--mono);font-size:.66rem;color:var(--faint);margin:.5rem 0 1.6rem}
+.effort-stops span.on{color:var(--amber);font-weight:600}
+.effort-row{display:grid;grid-template-columns:110px repeat(7,1fr);gap:.3rem;align-items:center;margin-bottom:.4rem}
+.effort-row .pname{font-family:var(--mono);font-size:.72rem}
+.effort-row.codex .pname{color:var(--cyan)}.effort-row.claude .pname{color:var(--coral)}.effort-row.pi .pname{color:var(--violet)}
+.ecell{
+  font-family:var(--mono);font-size:.62rem;text-align:center;padding:.4rem .1rem;
+  border-radius:5px;border:1px solid var(--line);color:var(--faint);
+  transition:all .2s;
+}
+.effort-row.codex .ecell.on{background:var(--cyan-dim);border-color:var(--cyan);color:var(--cyan);font-weight:600}
+.effort-row.claude .ecell.on{background:var(--coral-dim);border-color:var(--coral);color:var(--coral);font-weight:600}
+.effort-row.pi .ecell.on{background:rgba(199,146,234,.13);border-color:var(--violet);color:var(--violet);font-weight:600}
+.ecell.clamp{text-decoration:underline dotted}
+.effort .footnote{font-family:var(--mono);font-size:.68rem;color:var(--faint);margin-top:1rem}
+
+/* ---------- resume ---------- */
+.resume{
+  background:var(--panel2);border:1px solid var(--line);border-radius:12px;padding:1.6rem;
+}
+.resume-scenarios{display:flex;gap:.5rem;flex-wrap:wrap;margin-bottom:1.6rem}
+.resume-scenarios button{
+  font-family:var(--mono);font-size:.74rem;padding:.5rem .95rem;cursor:pointer;
+  background:transparent;border:1px solid var(--line2);border-radius:8px;color:var(--muted);
+  transition:all .15s;
+}
+.resume-scenarios button:hover{color:var(--ink)}
+.resume-scenarios button.on{background:var(--amber);border-color:var(--amber);color:#181104;font-weight:600}
+.journal{display:flex;gap:.6rem;flex-wrap:wrap;margin-bottom:1.3rem}
+.jcall{
+  font-family:var(--mono);font-size:.7rem;border-radius:8px;padding:.65rem .8rem;
+  border:1px solid var(--line2);min-width:120px;transition:all .35s;position:relative;
+}
+.jcall .idx{color:var(--faint);font-size:.6rem;display:block;margin-bottom:.15rem}
+.jcall .st{display:block;margin-top:.3rem;font-size:.6rem;letter-spacing:.08em;text-transform:uppercase}
+.jcall.cached{border-color:rgba(135,217,108,.5);background:var(--green-dim)}
+.jcall.cached .st{color:var(--green)}
+.jcall.cached .st::before{content:'▸ ';}
+.jcall.live{border-color:rgba(92,207,230,.5);background:var(--cyan-dim)}
+.jcall.live .st{color:var(--cyan)}
+.jcall.live .st::before{content:'● '}
+.jcall.edited{border-color:var(--coral);background:var(--coral-dim)}
+.jcall.edited .st{color:var(--coral)}
+.jcall.edited .st::before{content:'✎ '}
+.jcall.keyed{border-color:rgba(135,217,108,.5);background:var(--green-dim);outline:1px dashed var(--amber);outline-offset:2px}
+.jcall.keyed .st{color:var(--green)}
+.jcall.keyed .st::before{content:'⚲ '}
+.resume-caption{color:var(--muted);font-size:.92rem;min-height:3.2em}
+.resume-caption strong{color:var(--ink);font-weight:500}
+.banned{
+  margin-top:1.4rem;padding:1rem 1.2rem;border-radius:8px;font-size:.88rem;
+  background:rgba(242,95,108,.07);border:1px solid rgba(242,95,108,.3);color:var(--muted);
+}
+.banned b{color:var(--red);font-weight:600;font-family:var(--mono);font-size:.82rem}
+.banned i{color:var(--green);font-style:normal;font-family:var(--mono);font-size:.82rem}
+
+/* ---------- patterns ---------- */
+.patterns{display:grid;grid-template-columns:1fr 1fr;gap:1rem}
+details.pat{
+  background:var(--panel2);border:1px solid var(--line);border-radius:10px;
+  overflow:hidden;transition:border-color .2s;
+}
+details.pat[open]{border-color:var(--amber)}
+details.pat summary{
+  list-style:none;cursor:pointer;padding:1.1rem 1.3rem;display:flex;align-items:baseline;gap:.8rem;
+}
+details.pat summary::-webkit-details-marker{display:none}
+details.pat summary::before{
+  content:'+';font-family:var(--mono);color:var(--amber);font-size:1.1rem;
+  transition:transform .25s;flex-shrink:0;
+}
+details.pat[open] summary::before{transform:rotate(45deg)}
+details.pat summary h4{font-family:var(--serif);font-weight:400;font-size:1.25rem}
+details.pat summary .tag{font-family:var(--mono);font-size:.62rem;color:var(--faint);margin-left:auto;white-space:nowrap}
+details.pat .body{padding:0 1.3rem 1.3rem;color:var(--muted);font-size:.88rem}
+details.pat .body pre.code{margin-top:.8rem;font-size:.72rem}
+
+/* ---------- built-ins ---------- */
+.builtins{display:grid;grid-template-columns:repeat(3,1fr);gap:1rem}
+.bi{
+  background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:1.3rem;
+  display:flex;flex-direction:column;gap:.6rem;transition:transform .2s,border-color .2s;
+}
+.bi:hover{transform:translateY(-3px);border-color:var(--line2)}
+.bi .name{font-family:var(--mono);font-weight:600;font-size:.95rem;color:var(--amber)}
+.bi .badge{
+  align-self:flex-start;font-family:var(--mono);font-size:.58rem;letter-spacing:.1em;
+  text-transform:uppercase;padding:.18rem .5rem;border-radius:99px;border:1px solid var(--line2);color:var(--faint);
+}
+.bi .badge.multi{border-color:rgba(199,146,234,.5);color:var(--violet)}
+.bi .flow{font-size:.82rem;color:var(--muted);flex-grow:1}
+.bi .run{
+  font-family:var(--mono);font-size:.64rem;color:var(--cyan);background:var(--bg2);
+  border:1px solid var(--line);border-radius:6px;padding:.5rem .6rem;overflow-x:auto;white-space:nowrap;
+}
+.bi .run::before{content:'$ ';color:var(--faint)}
+
+/* ---------- CLI ---------- */
+.cli-grid{display:grid;grid-template-columns:1.3fr .7fr;gap:1.2rem;align-items:start}
+.cli-table{background:var(--panel2);border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.cli-table .row{
+  display:grid;grid-template-columns:200px 1fr;gap:1rem;padding:.8rem 1.2rem;
+  border-bottom:1px solid var(--line);font-size:.85rem;transition:background .15s;
+}
+.cli-table .row:last-child{border-bottom:none}
+.cli-table .row:hover{background:rgba(255,255,255,.02)}
+.cli-table .cmd{font-family:var(--mono);font-size:.74rem;color:var(--cyan)}
+.cli-table .what{color:var(--muted)}
+.limits{display:flex;flex-direction:column;gap:.8rem}
+.limit{
+  background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:1rem 1.2rem;
+}
+.limit .n{font-family:var(--serif);font-size:2rem;color:var(--amber);line-height:1.1}
+.limit .d{font-size:.8rem;color:var(--muted)}
+.limit .d code{font-size:.72rem}
+.viewer-note{
+  margin-top:1.4rem;padding:1.1rem 1.3rem;border-radius:10px;font-size:.9rem;color:var(--muted);
+  background:var(--cyan-dim);border:1px solid rgba(92,207,230,.3);
+}
+.viewer-note b{color:var(--cyan);font-weight:600}
+
+footer{
+  margin-top:5rem;padding:2.5rem 0 3rem;border-top:1px solid var(--line);
+  font-family:var(--mono);font-size:.7rem;color:var(--faint);
+  display:flex;justify-content:space-between;gap:1rem;flex-wrap:wrap;
+}
+footer .om{color:var(--amber)}
+
+/* ---------- responsive ---------- */
+@media (max-width:920px){
+  .hero-grid{grid-template-columns:1fr}
+  .cards3,.prov-grid,.builtins{grid-template-columns:1fr 1fr}
+  .anatomy,.dsl,.cli-grid,.patterns,.sim-tracks{grid-template-columns:1fr}
+  .anatomy .notepane,.dsl-list{position:static}
+  .dsl-list{flex-direction:row;flex-wrap:wrap}
+}
+@media (max-width:600px){
+  .cards3,.prov-grid,.builtins{grid-template-columns:1fr}
+  .effort-row{grid-template-columns:70px repeat(7,1fr)}
+  .cli-table .row{grid-template-columns:1fr}
+  nav .links{display:none}
+}
+</style>
+</head>
+<body>
+
+<nav>
+  <span class="mark">omegacode</span>
+  <div class="links">
+    <a href="#model">model</a>
+    <a href="#anatomy">anatomy</a>
+    <a href="#concurrency">concurrency</a>
+    <a href="#dsl">dsl</a>
+    <a href="#providers">providers</a>
+    <a href="#resume">resume</a>
+    <a href="#patterns">patterns</a>
+    <a href="#builtins">built-ins</a>
+    <a href="#cli">cli</a>
+    <a href="builtins.html" style="color:var(--cyan)">flows ↗</a>
+  </div>
+</nav>
+
+<div class="wrap">
+
+<!-- ═══════════════════ HERO ═══════════════════ -->
+<header class="hero">
+  <div class="cmd">omegacode run review.workflow.js</div>
+  <h1><span class="l1">One file.</span><span class="l2">A fleet of agents.</span></h1>
+  <p class="sub">A workflow is a <strong>plain JavaScript file</strong> that orchestrates many real agents — <strong>Codex</strong> (gpt-5.x) and <strong>Claude Code</strong> — deterministically. The file decides what fans out, what verifies, and what synthesizes. omegacode executes it, journals every step, and lets you resume from any edit.</p>
+
+  <div class="hero-grid">
+    <div class="orch">
+      <svg viewBox="0 0 560 300" aria-label="orchestration diagram">
+        <!-- wires -->
+        <path class="wire flow" style="stroke:var(--cyan);animation-delay:0s"   d="M118 150 C 180 150 180 45 240 45"/>
+        <path class="wire flow" style="stroke:var(--coral);animation-delay:.3s" d="M118 150 C 180 150 180 98 240 98"/>
+        <path class="wire flow" style="stroke:var(--cyan);animation-delay:.6s"  d="M118 150 C 180 150 180 150 240 150"/>
+        <path class="wire flow" style="stroke:var(--coral);animation-delay:.2s" d="M118 150 C 180 150 180 202 240 202"/>
+        <path class="wire flow" style="stroke:var(--cyan);animation-delay:.5s"  d="M118 150 C 180 150 180 255 240 255"/>
+        <path class="wire flow" style="stroke:var(--amber);animation-delay:.1s" d="M356 45  C 410 45  410 150 458 150"/>
+        <path class="wire flow" style="stroke:var(--amber);animation-delay:.4s" d="M356 98  C 410 98  410 150 458 150"/>
+        <path class="wire flow" style="stroke:var(--amber);animation-delay:.7s" d="M356 150 C 410 150 410 150 458 150"/>
+        <path class="wire flow" style="stroke:var(--amber);animation-delay:.2s" d="M356 202 C 410 202 410 150 458 150"/>
+        <path class="wire flow" style="stroke:var(--amber);animation-delay:.5s" d="M356 255 C 410 255 410 150 458 150"/>
+        <!-- workflow file node -->
+        <rect class="nodebox" x="8" y="118" width="110" height="64" rx="8"/>
+        <text class="hot" x="63" y="145" text-anchor="middle">review</text>
+        <text x="63" y="162" text-anchor="middle">.workflow.js</text>
+        <!-- agent nodes -->
+        <g class="pulse" style="animation-delay:0s"><rect class="nodebox" x="240" y="29"  width="116" height="32" rx="6"/><circle cx="254" cy="45" r="3" fill="var(--cyan)"/><text class="hot" x="264" y="49">codex · find</text></g>
+        <g class="pulse" style="animation-delay:.4s"><rect class="nodebox" x="240" y="82" width="116" height="32" rx="6"/><circle cx="254" cy="98" r="3" fill="var(--coral)"/><text class="hot" x="264" y="102">claude · find</text></g>
+        <g class="pulse" style="animation-delay:.8s"><rect class="nodebox" x="240" y="134" width="116" height="32" rx="6"/><circle cx="254" cy="150" r="3" fill="var(--cyan)"/><text class="hot" x="264" y="154">codex · verify</text></g>
+        <g class="pulse" style="animation-delay:1.2s"><rect class="nodebox" x="240" y="186" width="116" height="32" rx="6"/><circle cx="254" cy="202" r="3" fill="var(--coral)"/><text class="hot" x="264" y="206">claude · verify</text></g>
+        <g class="pulse" style="animation-delay:1.6s"><rect class="nodebox" x="240" y="239" width="116" height="32" rx="6"/><circle cx="254" cy="255" r="3" fill="var(--cyan)"/><text class="hot" x="264" y="259">codex · sweep</text></g>
+        <!-- synth node -->
+        <rect class="nodebox" x="458" y="124" width="94" height="52" rx="8" style="stroke:var(--amber)"/>
+        <text class="hot" x="505" y="146" text-anchor="middle">synthesize</text>
+        <text x="505" y="162" text-anchor="middle" style="fill:var(--amber)">→ result</text>
+      </svg>
+    </div>
+
+    <div class="term">
+      <div class="bar"><i></i><i></i><i></i></div>
+      <div class="body">
+        <div class="tl"><span class="p">$</span> omegacode run review.workflow.js</div>
+        <div class="tl"><span class="c-am">run</span> wf_4k9s2e <span class="c-mu">· review-changes</span></div>
+        <div class="tl"><span class="c-mu">view</span>  <span class="c-cy">http://127.0.0.1:4123/#/run/wf_4k9s2e</span></div>
+        <div class="tl"><span class="c-gr">◉ Review</span>  review:bugs · review:perf  <span class="c-mu">2 running</span></div>
+        <div class="tl"><span class="c-mu">◌ Verify   queued</span></div>
+      </div>
+    </div>
+  </div>
+  <div class="scrollcue">▼ SCROLL</div>
+</header>
+
+<!-- ═══════════════════ 01 MENTAL MODEL ═══════════════════ -->
+<section id="model">
+  <div class="kicker rv">01 / Mental model</div>
+  <h2 class="rv">Why structure work <em>across</em> agents?</h2>
+  <p class="lede rv">One agent has one context window and one perspective. A workflow buys you three things a single context can't — and the file is where you encode that structure.</p>
+  <div class="cards3">
+    <div class="card am rv"><div class="glowbar"></div>
+      <div class="num">REACH</div>
+      <h3>Be <em>comprehensive</em></h3>
+      <p>Decompose the task and cover it in parallel — one reader per subsystem, one finder per review dimension, one searcher per modality. Nothing waits on anything it doesn't depend on.</p>
+    </div>
+    <div class="card cy rv"><div class="glowbar"></div>
+      <div class="num">TRUST</div>
+      <h3>Be <em>confident</em></h3>
+      <p>Independent perspectives and adversarial checks before committing. Spawn skeptics that try to refute each finding; only what survives a panel ships. Cross-provider disagreement is signal.</p>
+    </div>
+    <div class="card co rv"><div class="glowbar"></div>
+      <div class="num">SCALE</div>
+      <h3>Beyond <em>one context</em></h3>
+      <p>Migrations, audits, broad sweeps — work too large for any single context window. Each agent holds one slice; the workflow holds the shape and stitches results back together.</p>
+    </div>
+  </div>
+  <p class="lede rv" style="margin-top:2.2rem;margin-bottom:0">The right move is often <strong style="color:var(--ink)">hybrid</strong>: scout first (list the files, scope the diff) to discover the work-list, <em style="color:var(--amber)">then</em> write the workflow to pipeline over it. For larger work, chain several workflows — <code>Understand → Design → Review</code> — reading each result before deciding the next. You stay in the loop; each run is one well-scoped fan-out.</p>
+</section>
+
+<!-- ═══════════════════ 02 ANATOMY ═══════════════════ -->
+<section id="anatomy">
+  <div class="kicker rv">02 / Anatomy</div>
+  <h2 class="rv">A workflow file, <em>dissected</em></h2>
+  <p class="lede rv">This is the canonical review workflow, in full. <strong style="color:var(--ink)">Click any region of the code</strong> to see what it does and why it's shaped that way.</p>
+  <div class="anatomy rv">
+    <div class="codepane" id="anatomyCode"></div>
+    <div class="notepane">
+      <div class="anote">
+        <div class="tag" id="anoteTag"></div>
+        <h4 id="anoteTitle"></h4>
+        <p id="anoteBody"></p>
+      </div>
+      <div class="anote-steps" id="anoteSteps"></div>
+      <div class="hintline">// plain JS, not TypeScript — annotations fail to parse. body runs async: await directly.</div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════ 03 CONCURRENCY SIM ═══════════════════ -->
+<section id="concurrency">
+  <div class="kicker rv">03 / Concurrency</div>
+  <h2 class="rv">pipeline() vs the <em>barrier</em></h2>
+  <p class="lede rv">The single most important authoring decision. Both runs below do <strong style="color:var(--ink)">identical work</strong> — five items, three stages, the same durations. <code>pipeline()</code> lets each item flow ahead independently; <code>parallel()</code> between stages is a barrier where every item waits for the slowest sibling. Watch them race.</p>
+
+  <div class="sim rv">
+    <div class="sim-head">
+      <button class="btn" id="simRun">▶ RUN BOTH</button>
+      <div class="sim-clock"><span>t =</span> <b id="simClock">0.0s</b></div>
+      <div class="legend">
+        <span class="l1"><i></i>find</span>
+        <span class="l2"><i></i>verify</span>
+        <span class="l3"><i></i>report</span>
+        <span class="l4"><i></i>waiting at barrier</span>
+      </div>
+    </div>
+    <div class="sim-tracks">
+      <div class="sim-panel" id="panelPipe">
+        <h4><span class="fn">pipeline</span>(items, find, verify, report)</h4>
+        <div class="meta">no barrier — each item proceeds the moment its previous stage ends</div>
+        <div class="finish" id="finishPipe"></div>
+        <div class="sim-rows" id="rowsPipe"></div>
+        <div class="axis" id="axisPipe"></div>
+      </div>
+      <div class="sim-panel" id="panelBar">
+        <h4><span class="fn">parallel</span>(find) → <span class="fn">parallel</span>(verify) → <span class="fn">parallel</span>(report)</h4>
+        <div class="meta">barrier after each stage — everyone waits for the slowest item</div>
+        <div class="finish" id="finishBar"></div>
+        <div class="sim-rows" id="rowsBar"></div>
+        <div class="axis" id="axisBar"></div>
+      </div>
+    </div>
+    <div class="sim-verdict" id="simVerdict"></div>
+  </div>
+
+  <p class="lede rv" style="margin-top:2rem;margin-bottom:.6rem"><strong style="color:var(--ink)">Default to pipeline().</strong> A barrier is correct only when stage N genuinely needs cross-item context from <em>all</em> of stage N−1:</p>
+  <ul class="rv" style="color:var(--muted);font-size:.95rem;padding-left:1.3rem;max-width:46rem">
+    <li style="margin-bottom:.4rem">Dedup / merge across the full result set before expensive downstream work</li>
+    <li style="margin-bottom:.4rem">Early-exit when the total is zero — “0 bugs found → skip verification entirely”</li>
+    <li style="margin-bottom:.4rem">Stage N's prompt references “the other findings” for comparison</li>
+  </ul>
+  <p class="lede rv" style="margin-top:1rem;margin-bottom:0">Not justified by “I need to flatten first” (do it inside a stage), “the stages are conceptually separate” (that's exactly what pipeline models), or “it's cleaner code” (barrier latency is real). When in doubt: pipeline.</p>
+</section>
+
+<!-- ═══════════════════ 04 DSL ═══════════════════ -->
+<section id="dsl">
+  <div class="kicker rv">04 / The DSL</div>
+  <h2 class="rv">Eight hooks. <em>That's the whole language.</em></h2>
+  <p class="lede rv">The script body is plain JavaScript with these injected. No filesystem, no network, no imports — the <em style="color:var(--amber)">agents</em> do the I/O; the file only does orchestration.</p>
+  <div class="dsl rv">
+    <div class="dsl-list" id="dslList"></div>
+    <div class="dsl-detail">
+      <div class="sig" id="dslSig"></div>
+      <div class="desc" id="dslDesc"></div>
+      <pre class="code"><code class="js" id="dslCode"></code></pre>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════ 05 PROVIDERS ═══════════════════ -->
+<section id="providers">
+  <div class="kicker rv">05 / Providers</div>
+  <h2 class="rv">Every agent() runs on a <em>real provider</em></h2>
+  <p class="lede rv"><strong style="color:var(--ink)">Default: set neither <code>provider</code> nor <code>model</code>.</strong> Each agent inherits whatever the run was invoked with (<code>--provider</code> / <code>--model</code>, default <code>codex</code>). Pin one only when the user asked for it, or a step deliberately needs cross-provider diversity. <code>omegacode doctor</code> shows what's installed and authed.</p>
+
+  <div class="prov-grid">
+    <div class="prov codex rv">
+      <h3>codex</h3>
+      <div class="sub">OpenAI · gpt-5.x · the default</div>
+      <ul>
+        <li><b>Auth:</b> the <code>codex</code> CLI, ChatGPT login — ignores <code>OPENAI_API_KEY</code></li>
+        <li><b>Structured output:</b> free-form working turn, then a schema-constrained extraction turn</li>
+        <li><b>Extras:</b> built-in hosted tools incl. image generation come from that auth</li>
+      </ul>
+      <div class="chips">
+        <span class="chip def">read-only (default)</span>
+        <span class="chip ok">workspace-write</span>
+        <span class="chip ok">danger-full-access</span>
+      </div>
+    </div>
+    <div class="prov claude rv">
+      <h3>claude-code</h3>
+      <div class="sub">Anthropic · via Claude Agent SDK</div>
+      <ul>
+        <li><b>Auth:</b> the <code>claude</code> CLI / SDK available</li>
+        <li><b>Structured output:</b> delivered on the final result only — intermediate messages stay free-form</li>
+        <li><b>Effort:</b> <code>max</code> is Opus-tier; unsupported levels silently downgrade</li>
+      </ul>
+      <div class="chips">
+        <span class="chip def">read-only (default)</span>
+        <span class="chip ok">workspace-write</span>
+        <span class="chip ok">danger-full-access</span>
+      </div>
+    </div>
+    <div class="prov pi rv">
+      <h3>pi</h3>
+      <div class="sub">@earendil-works/pi-coding-agent ≥ 0.79.1</div>
+      <ul>
+        <li><b>Models:</b> open references, e.g. <code>"openrouter/moonshotai/kimi-k2.6"</code></li>
+        <li><b>Structured output:</b> silent tool-less extraction turn; <code>maxTurns</code> rejected</li>
+        <li><b>Fail-closed:</b> tool allowlists ≠ OS confinement, so weaker sandboxes are refused; outdated binaries refused at runtime</li>
+      </ul>
+      <div class="chips">
+        <span class="chip warn">requires danger-full-access</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="effort rv">
+    <h3>The <code>effort</code> union, mapped per worker</h3>
+    <p class="lede">One union — <code style="white-space:normal">"none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max"</code> — and each worker maps to its nearest supported level. Drag to see who clamps what.</p>
+    <input type="range" id="effortSlider" min="0" max="6" value="3" step="1" aria-label="effort level">
+    <div class="effort-stops" id="effortStops"></div>
+    <div id="effortRows"></div>
+    <div class="footnote">// dotted = clamped to nearest supported level (minimal→low on claude, max→xhigh on codex/pi, none→off on pi)</div>
+  </div>
+</section>
+
+<!-- ═══════════════════ 06 RESUME ═══════════════════ -->
+<section id="resume">
+  <div class="kicker rv">06 / Determinism &amp; resume</div>
+  <h2 class="rv">Every run is a <em>journal</em> you can replay</h2>
+  <p class="lede rv">Runs persist to <code>~/.omegacode/runs/&lt;id&gt;/</code> and print a <code>runId</code>. Re-run with <code>--resume &lt;runId&gt;</code> and the <strong style="color:var(--ink)">longest unchanged prefix</strong> of agent() calls returns cached results instantly — only the first edited call and everything after it runs live. Pick a scenario:</p>
+
+  <div class="resume rv">
+    <div class="resume-scenarios">
+      <button data-sc="same" class="on">re-run unchanged</button>
+      <button data-sc="edit">edit call #3's prompt</button>
+      <button data-sc="key">edit #3, but #5 is key-pinned</button>
+    </div>
+    <div class="journal" id="journal"></div>
+    <p class="resume-caption" id="resumeCaption"></p>
+    <div class="banned">
+      Determinism is why <b>Date.now()</b>, <b>Math.random()</b> and argless <b>new Date()</b> <em style="color:var(--red);font-style:normal">throw</em> inside a workflow (and are rejected by a submit-time lint) — they'd make replays diverge. Use the journal-seeded <i>now()</i> / <i>random()</i> instead, or pass timestamps in via <i>args</i>.
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════ 07 PATTERNS ═══════════════════ -->
+<section id="patterns">
+  <div class="kicker rv">07 / Quality patterns</div>
+  <h2 class="rv">Shapes worth <em>stealing</em></h2>
+  <p class="lede rv">Pick by task, compose freely — and invent new harnesses when the task calls for it (tournament brackets, self-repair loops, staged escalation). Scale to the ask: “find any bugs” → a few finders, single-vote verify; “thoroughly audit this” → larger pool, 3–5-vote adversarial pass, synthesis stage.</p>
+  <div class="patterns rv" id="patternsGrid"></div>
+</section>
+
+<!-- ═══════════════════ 08 BUILT-INS ═══════════════════ -->
+<section id="builtins">
+  <div class="kicker rv">08 / Built-ins</div>
+  <h2 class="rv">Six workflows <em>ship in the box</em></h2>
+  <p class="lede rv"><code>run</code> and <code>validate</code> accept a bare name (the workflow's <code>meta.name</code>, not its filename), resolved project → user → built-in, nearer shadowing farther. Two are ports of Claude Code's bundled workflows; four are multi-provider originals where two models' <strong style="color:var(--ink)">decorrelated errors are the point</strong>. <a href="builtins.html">Trace each flow step-by-step →</a></p>
+  <div class="builtins rv" id="builtinsGrid"></div>
+</section>
+
+<!-- ═══════════════════ 09 CLI ═══════════════════ -->
+<section id="cli">
+  <div class="kicker rv">09 / CLI &amp; limits</div>
+  <h2 class="rv">The <em>command surface</em></h2>
+  <div class="cli-grid rv">
+    <div class="cli-table" id="cliTable"></div>
+    <div class="limits">
+      <div class="limit"><div class="n">100</div><div class="d">concurrent agents per workflow (default) — override with <code>--concurrency N</code>; excess calls queue</div></div>
+      <div class="limit"><div class="n">1,000</div><div class="d">lifetime agent cap per run — a runaway-loop backstop, far above any real workflow</div></div>
+      <div class="limit"><div class="n">4,096</div><div class="d">max items per single <code>parallel()</code>/<code>pipeline()</code> call — exceeding is an explicit error, never silent truncation</div></div>
+      <div class="limit"><div class="n">read-only</div><div class="d">the default <code>sandbox</code> — grant <code>workspace-write</code> only when an agent must write</div></div>
+    </div>
+  </div>
+  <div class="viewer-note rv">
+    <b>The live viewer</b> auto-starts on <code>run</code> (reused if already up) and idle-shuts-down when nothing's active. It reads <code>~/.omegacode/runs</code>, streams via SSE, and never executes anything: run list, live phase/agent tree, per-agent chat-feed drilldown. The moment a run starts it prints <code>view: http://127.0.0.1:4123/#/run/&lt;id&gt;</code> — when an agent runs a workflow for you, it should surface that link <em style="color:var(--ink)">before</em> the run finishes so you can watch live. <code>--fake</code> smoke-tests with no real agents; <code>--json</code> returns <code>{runId, status, url, result, error}</code>.
+  </div>
+</section>
+
+<footer>
+  <span><span class="om">Ω omegacode</span> — deterministic multi-agent orchestration</span>
+  <span>generated from the omegacode skill docs · 2026-06</span>
+</footer>
+
+</div><!-- /wrap -->
+
+<script>
+document.documentElement.classList.add('js');
+
+/* ───────────────── syntax highlighter (display-only) ───────────────── */
+function esc(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
+function hl(code){
+  const re=/(\/\/[^\n]*)|('(?:[^'\\]|\\.)*'|`(?:[^`\\]|\\.)*`|"(?:[^"\\]|\\.)*")|\b(export|const|let|await|return|while|if|else|continue|new|true|false|null|of|for|function)\b|\b(\d[\d_]*(?:\.\d+)?)\b|\b(agent|pipeline|parallel|phase|log|now|random|workflow|filter|map|flat|flatMap|push|then|spent|remaining)(?=\()/g;
+  return esc(code).replace(re,(m,com,str,kw,num,fn)=>{
+    if(com)return '<span class="tk-c">'+com+'</span>';
+    if(str)return '<span class="tk-s">'+str+'</span>';
+    if(kw) return '<span class="tk-k">'+kw+'</span>';
+    if(num)return '<span class="tk-n">'+num+'</span>';
+    if(fn) return '<span class="tk-f">'+fn+'</span>';
+    return m;
+  });
+}
+
+/* ───────────────── scroll reveal ───────────────── */
+const io=new IntersectionObserver(es=>es.forEach(e=>{
+  if(e.isIntersecting){e.target.classList.add('in');io.unobserve(e.target)}
+}),{threshold:.12});
+document.querySelectorAll('.rv').forEach(el=>io.observe(el));
+
+/* ───────────────── 02 anatomy ───────────────── */
+const ANATOMY_NOTES={
+  meta:  {title:'The meta block', body:'Every workflow opens with export const meta — a PURE literal: no variables, calls, spreads, or template interpolation. name and description are required. phases titles are matched exactly against phase() calls and opts.phase to group agents in the live viewer.'},
+  schema:{title:'Schemas force structure', body:'Pass a JSON Schema and the agent is forced to return JSON matching it — agent() resolves to the validated object, no parsing. Validation happens at the worker layer; the agent retries once on a mismatch. Without a schema you get the final text as a string.'},
+  work:  {title:'The work-list', body:'Often you scout first — cheap greps, file lists, scoping the diff — and write this array from what you found. You don’t need to know the shape before the task, only before the orchestration step. Parameterize via --args and read it from the injected args global.'},
+  pipe:  {title:'pipeline() — no barrier', body:'Each item flows through every stage independently: the “bugs” findings can be verifying while “perf” is still reviewing. Wall-clock = the slowest single-item chain, not sum-of-slowest-per-stage. Stage callbacks receive (prevResult, originalItem, index). A stage that throws drops that item to null and skips its remaining stages.'},
+  agent: {title:'agent() spawns a real agent', body:'Each call is a live Codex or Claude Code process. No provider/model set → it inherits the run’s --provider/--model (default codex) — which is almost always right. label and phase control the viewer display; sandbox defaults to read-only.'},
+  verify:{title:'A barrier inside one item is fine', body:'parallel() here fans one adversarial skeptic per finding, all at once — and that’s correct because we genuinely want all verdicts for this dimension together. Failed or skipped thunks resolve to null (the call never rejects), hence filter(Boolean) downstream.'},
+  ret:   {title:'return is the run’s result', body:'Whatever the body returns is printed by the CLI, persisted under ~/.omegacode/runs/<id>/, and available via --json as {runId, status, url, result, error}. Chain workflows by reading one run’s result before authoring the next.'},
+};
+const ANATOMY_LINES=[
+  ['meta',  "export const meta = {"],
+  ['meta',  "  name: 'review-changes',"],
+  ['meta',  "  description: 'Review changed files, verify each finding',"],
+  ['meta',  "  phases: [{ title: 'Review' }, { title: 'Verify' }],"],
+  ['meta',  "}"],
+  ['schema',""],
+  ['schema',"const FINDINGS = { type: 'object', properties: { findings: { type: 'array' } } }"],
+  ['schema',"const VERDICT  = { type: 'object', properties: { isReal: { type: 'boolean' } } }"],
+  ['work',  ""],
+  ['work',  "const DIMENSIONS = ["],
+  ['work',  "  { key: 'bugs', prompt: 'Find correctness bugs in the diff.' },"],
+  ['work',  "  { key: 'perf', prompt: 'Find performance regressions in the diff.' },"],
+  ['work',  "]"],
+  ['pipe',  ""],
+  ['pipe',  "const results = await pipeline("],
+  ['pipe',  "  DIMENSIONS,"],
+  ['agent', "  d => agent(d.prompt, { label: `review:${d.key}`, phase: 'Review', schema: FINDINGS }),"],
+  ['verify',"  review => parallel(review.findings.map(f => () =>"],
+  ['verify',"    agent(`Adversarially verify: ${f.title}`, { phase: 'Verify', schema: VERDICT })"],
+  ['verify',"      .then(v => ({ ...f, verdict: v }))"],
+  ['verify',"  ))"],
+  ['pipe',  ")"],
+  ['ret',   ""],
+  ['ret',   "return { confirmed: results.flat().filter(Boolean).filter(f => f.verdict?.isReal) }"],
+];
+const STEP_LABELS={meta:'meta',schema:'schemas',work:'work-list',pipe:'pipeline',agent:'agent()',verify:'verify fan-out',ret:'return'};
+(function(){
+  const pane=document.getElementById('anatomyCode');
+  const steps=document.getElementById('anoteSteps');
+  ANATOMY_LINES.forEach(([g,t])=>{
+    const d=document.createElement('div');
+    d.className='line';d.dataset.g=g;
+    d.innerHTML=hl(t)||'&nbsp;';
+    d.addEventListener('click',()=>select(g));
+    d.addEventListener('mouseenter',()=>pane.querySelectorAll('.line[data-g="'+g+'"]').forEach(l=>l.style.background='rgba(255,255,255,.04)'));
+    d.addEventListener('mouseleave',()=>pane.querySelectorAll('.line[data-g="'+g+'"]').forEach(l=>l.style.background=''));
+    pane.appendChild(d);
+  });
+  Object.keys(STEP_LABELS).forEach(g=>{
+    const b=document.createElement('button');
+    b.textContent=STEP_LABELS[g];b.dataset.g=g;
+    b.addEventListener('click',()=>select(g));
+    steps.appendChild(b);
+  });
+  function select(g){
+    pane.querySelectorAll('.line').forEach(l=>l.classList.toggle('hl',l.dataset.g===g));
+    steps.querySelectorAll('button').forEach(b=>b.classList.toggle('on',b.dataset.g===g));
+    document.getElementById('anoteTag').textContent=STEP_LABELS[g];
+    document.getElementById('anoteTitle').textContent=ANATOMY_NOTES[g].title;
+    document.getElementById('anoteBody').textContent=ANATOMY_NOTES[g].body;
+  }
+  select('meta');
+})();
+
+/* ───────────────── 03 simulator ───────────────── */
+(function(){
+  const ITEMS=['bugs','perf','security','types','tests'];
+  const DUR=[ // seconds per [find, verify, report] — identical for both runs
+    [1.0,3.6,0.8],
+    [3.8,1.0,1.2],
+    [1.4,1.6,1.0],
+    [2.4,1.2,0.6],
+    [1.2,2.0,1.4],
+  ];
+  // pipeline: each item chains immediately
+  const pipe=DUR.map(r=>{let t=0;return r.map(d=>{const s=t;t+=d;return{s,d}})});
+  const pipeFinish=Math.max(...pipe.map(r=>r[2].s+r[2].d));
+  // barrier: stage s starts at max end of stage s-1
+  const barriers=[0];
+  for(let s=0;s<3;s++)barriers.push(barriers[s]+Math.max(...DUR.map(r=>r[s])));
+  const bar=DUR.map(r=>r.map((d,s)=>({s:barriers[s],d})));
+  const barFinish=barriers[3];
+  const TOTAL=barFinish*1.045, SPEED=2.2; // sim-seconds per real second
+
+  function buildPanel(rowsEl,axisEl,sched,withIdle){
+    const segs=[];
+    sched.forEach((row,i)=>{
+      const r=document.createElement('div');r.className='sim-row';
+      r.innerHTML='<span class="lbl">'+ITEMS[i]+'</span>';
+      const tr=document.createElement('div');tr.className='sim-track';
+      row.forEach((seg,s)=>{
+        if(withIdle&&s>0){
+          const prevEnd=sched[i][s-1].s+sched[i][s-1].d;
+          if(seg.s-prevEnd>0.05){
+            const idle=document.createElement('div');idle.className='idle';
+            idle.style.left=(prevEnd/TOTAL*100)+'%';
+            idle.style.width=((seg.s-prevEnd)/TOTAL*100)+'%';
+            tr.appendChild(idle);
+          }
+        }
+        const el=document.createElement('div');el.className='seg s'+s;
+        el.style.left=(seg.s/TOTAL*100)+'%';
+        el.style.width=(seg.d/TOTAL*100)+'%';
+        el.innerHTML='<div class="fill"></div>';
+        tr.appendChild(el);
+        segs.push({fill:el.firstChild,start:seg.s,dur:seg.d});
+      });
+      r.appendChild(tr);rowsEl.appendChild(r);
+    });
+    if(withIdle){
+      [1,2].forEach(k=>{
+        const bl=document.createElement('div');bl.className='barrier-line';
+        bl.dataset.lbl='barrier';
+        bl.style.left='calc(70px + (100% - 70px) * '+(barriers[k]/TOTAL)+')';
+        rowsEl.appendChild(bl);
+      });
+    }
+    const ph=document.createElement('div');ph.className='playhead';rowsEl.appendChild(ph);
+    for(let t=0;t<=8;t+=2)axisEl.innerHTML+='<span>'+t+'s</span>';
+    return{segs,ph};
+  }
+  const P=buildPanel(document.getElementById('rowsPipe'),document.getElementById('axisPipe'),pipe,false);
+  const B=buildPanel(document.getElementById('rowsBar'),document.getElementById('axisBar'),bar,true);
+
+  const clock=document.getElementById('simClock');
+  const fP=document.getElementById('finishPipe'), fB=document.getElementById('finishBar');
+  const verdict=document.getElementById('simVerdict');
+  const btn=document.getElementById('simRun');
+  let raf=null;
+
+  function setTime(panel,t,finish){
+    const tc=Math.min(t,finish);
+    panel.ph.style.opacity=t>0?1:0;
+    panel.ph.style.left='calc(70px + (100% - 70px) * '+(tc/TOTAL)+')';
+    panel.segs.forEach(g=>{
+      const p=Math.max(0,Math.min(1,(t-g.start)/g.dur));
+      g.fill.style.transform='scaleX('+p+')';
+    });
+  }
+  function run(){
+    if(raf)cancelAnimationFrame(raf);
+    fP.classList.remove('show');fB.classList.remove('show');verdict.classList.remove('show');
+    btn.disabled=true;
+    const t0=performance.now();
+    (function tick(){
+      const t=(performance.now()-t0)/1000*SPEED;
+      setTime(P,t,pipeFinish);setTime(B,t,barFinish);
+      clock.textContent=Math.min(t,barFinish).toFixed(1)+'s';
+      if(t>=pipeFinish&&!fP.classList.contains('show')){fP.textContent='✓ done '+pipeFinish.toFixed(1)+'s';fP.classList.add('show')}
+      if(t>=barFinish){
+        fB.textContent='✓ done '+barFinish.toFixed(1)+'s';fB.classList.add('show');
+        const dt=(barFinish-pipeFinish), pct=Math.round(dt/barFinish*100);
+        verdict.innerHTML='Same work, same durations — <strong>pipeline() finished '+dt.toFixed(1)+'s sooner ('+pct+'% less wall-clock)</strong>, because no item ever waited for the slowest sibling. The hatched gaps on the right are pure idle time bought by the barriers.';
+        verdict.classList.add('show');
+        btn.disabled=false;btn.textContent='↺ REPLAY';
+        return;
+      }
+      raf=requestAnimationFrame(tick);
+    })();
+  }
+  btn.addEventListener('click',run);
+  // auto-run once on first scroll into view
+  const simIo=new IntersectionObserver(es=>{
+    if(es[0].isIntersecting){simIo.disconnect();setTimeout(run,500)}
+  },{threshold:.45});
+  simIo.observe(document.querySelector('.sim'));
+})();
+
+/* ───────────────── 04 DSL reference ───────────────── */
+const DSL=[
+ {name:'agent()',sig:'agent(prompt, opts?) → Promise<any>',
+  desc:'Spawns one real agent. Without a schema it resolves to the final text; with one, to the validated JSON object. Resolves to null if the user skips it mid-run — filter(Boolean). Agents are told their final text IS the return value, so they return raw data, not prose. opts: provider, model, effort, schema, label, sandbox, cwd, instructions, maxTurns, worktree, key. worktree:true gives a fresh git worktree — expensive; only for parallel file mutation (auto-removed if unchanged).',
+  code:"const v = await agent('Is this a real bug? ' + s.desc, {\n  schema: VERDICT,          // forced, validated JSON\n  label: 'verify:' + s.file, // viewer display\n  sandbox: 'read-only',     // the default anyway\n})"},
+ {name:'pipeline()',sig:'pipeline(items, stage1, stage2, …) → Promise<any[]>',
+  desc:'Runs each item through all stages independently — NO barrier. Item A can be in stage 3 while item B is still in stage 1; wall-clock is the slowest single-item chain. Every stage callback receives (prevResult, originalItem, index). A stage that throws drops that item to null and skips its remaining stages. This is the DEFAULT for multi-stage work.',
+  code:"const out = await pipeline(\n  files,\n  f => agent('Summarize ' + f, { schema: SUMMARY }),\n  (sum, f, i) => agent('Deep-read #' + i + ': ' + f + '\\n' + sum.gist),\n)"},
+ {name:'parallel()',sig:'parallel(thunks) → Promise<any[]>',
+  desc:'Runs thunks concurrently and waits for ALL of them — a barrier. A thunk that throws (or whose agent errors) resolves to null in the result array; the call itself never rejects, so filter(Boolean) before using results. Reach for it only when you genuinely need every result together: dedup across the set, zero-count early-exit, or prompts that reference “the other findings”.',
+  code:"const all = await parallel(AREAS.map(a => () =>\n  agent('Inspect ' + a + ' and list concrete issues.', { schema: FINDINGS })))\nconst found = all.filter(Boolean).flatMap(r => r.findings)\nif (!found.length) return { clean: true }   // the barrier earned its keep"},
+ {name:'phase()',sig:'phase(title) → void',
+  desc:'Starts a new phase: subsequent agent() calls group under this title in the live viewer’s progress tree. Titles are matched exactly against meta.phases. Inside pipeline()/parallel() stages, prefer opts.phase on the agent call instead — it assigns the group explicitly and avoids races on the global phase state.',
+  code:"phase('Scan')\nconst flaky = await agent('grep CI logs for retry markers', { schema: FLAKY })\nphase('Fix')   // everything below lands in the Fix group"},
+ {name:'log()',sig:'log(message) → void',
+  desc:'Emits a narrator line above the progress tree. Use it for honest accounting: counts, loop progress, and — critically — anything you dropped. If a workflow bounds coverage (top-N, sampling, no-retry), log what was cut; silent truncation reads as “covered everything” when it didn’t.',
+  code:"log(bugs.length + '/10 found')\nlog('capped sources at top 20 — dropped ' + (all.length - 20))"},
+ {name:'args',sig:"args: any  — from --args '<json>' / --args-file <f>",
+  desc:'The value passed on the CLI, verbatim (undefined if none). This is how a saved workflow becomes reusable: pass a research question, a target path, or a config object instead of hard-coding it. Also the escape hatch for timestamps, since wall-clock APIs are banned in the body.',
+  code:"// omegacode run deep-research --args '\"How do CRDTs handle tombstones?\"'\nconst question = args\nconst plan = await agent('Scope this research question: ' + question)"},
+ {name:'budget',sig:'budget: { total, spent(), remaining() }',
+  desc:'The run’s output-token target from --budget N. A HARD ceiling, not advisory — once spent() reaches total, further agent() calls throw. total is null when unset (remaining() → Infinity), so always guard loops on budget.total or they’ll run straight at the 1000-agent cap. Also useful for static scaling: size the fleet to the budget.',
+  code:"const FLEET = budget.total ? Math.floor(budget.total / 100_000) : 5\nwhile (budget.total && budget.remaining() > 50_000) {\n  const r = await agent('Find bugs in this codebase.', { schema: BUGS })\n  bugs.push(...r.bugs)\n  log(bugs.length + ' found, ' + Math.round(budget.remaining() / 1000) + 'k left')\n}"},
+ {name:'now() / random()',sig:'now() → number   random() → number',
+  desc:'Journal-seeded deterministic time and RNG. Date.now(), Math.random() and argless new Date() throw inside a workflow — replaying them on --resume would diverge from the journal — and a submit-time lint rejects them before the run even starts. These two give you the same values on every replay.',
+  code:"const started = now()\nconst sample = items.filter(() => random() < 0.2)   // same sample on every resume"},
+];
+(function(){
+  const list=document.getElementById('dslList');
+  DSL.forEach((d,i)=>{
+    const b=document.createElement('button');
+    b.textContent=d.name;
+    b.addEventListener('click',()=>show(i));
+    list.appendChild(b);
+  });
+  function show(i){
+    list.querySelectorAll('button').forEach((b,j)=>b.classList.toggle('on',i===j));
+    document.getElementById('dslSig').textContent=DSL[i].sig;
+    document.getElementById('dslDesc').textContent=DSL[i].desc;
+    document.getElementById('dslCode').innerHTML=hl(DSL[i].code);
+  }
+  show(0);
+})();
+
+/* ───────────────── 05 effort slider ───────────────── */
+(function(){
+  const LEVELS=['none','minimal','low','medium','high','xhigh','max'];
+  const MAP={
+    codex: ['minimal','minimal','low','medium','high','xhigh','xhigh'],
+    claude:['low','low','low','medium','high','xhigh','max'],
+    pi:    ['off','minimal','low','medium','high','xhigh','xhigh'],
+  };
+  const NAMES={codex:'codex',claude:'claude-code',pi:'pi'};
+  const stops=document.getElementById('effortStops');
+  LEVELS.forEach(l=>stops.innerHTML+='<span>'+l+'</span>');
+  const rows=document.getElementById('effortRows');
+  Object.keys(MAP).forEach(p=>{
+    const r=document.createElement('div');r.className='effort-row '+p;
+    r.innerHTML='<span class="pname">'+NAMES[p]+'</span>'+MAP[p].map((v,i)=>
+      '<span class="ecell'+(v!==LEVELS[i]?' clamp':'')+'" data-p="'+p+'" data-i="'+i+'">'+v+'</span>').join('');
+    rows.appendChild(r);
+  });
+  const slider=document.getElementById('effortSlider');
+  function update(){
+    const i=+slider.value;
+    stops.querySelectorAll('span').forEach((s,j)=>s.classList.toggle('on',i===j));
+    rows.querySelectorAll('.ecell').forEach(c=>c.classList.toggle('on',+c.dataset.i===i));
+  }
+  slider.addEventListener('input',update);
+  update();
+})();
+
+/* ───────────────── 06 resume journal ───────────────── */
+(function(){
+  const CALLS=[
+    {l:'scan-diff'},{l:'read:core'},{l:'review:bugs'},
+    {l:'review:perf'},{l:"verify · key:'v1'"},{l:'report'},
+  ];
+  const SC={
+    same:{states:['cached','cached','cached','cached','cached','cached'],
+      cap:'Same file, same args → the journal prefix matches end-to-end. Every call replays its cached result instantly: 100% cache hit, zero agents spawned.'},
+    edit:{states:['cached','cached','edited','live','live','live'],
+      cap:'Call #3’s prompt changed → calls #1–2 are the unchanged prefix and replay from cache; #3 and everything after it run live, with fresh agents.'},
+    key: {states:['cached','cached','edited','live','keyed','live'],
+      cap:'Same edit, but call #5 carries opts.key — a stable resume pin. It keeps its cached result despite the upstream change, surviving prompt-wording and reorder edits.'},
+  };
+  const journal=document.getElementById('journal');
+  CALLS.forEach((c,i)=>{
+    const d=document.createElement('div');d.className='jcall';
+    d.innerHTML='<span class="idx">agent #'+(i+1)+'</span>'+c.l+'<span class="st"></span>';
+    journal.appendChild(d);
+  });
+  const btns=document.querySelectorAll('.resume-scenarios button');
+  const STLBL={cached:'cached',live:'runs live',edited:'edited — live',keyed:'key-pinned · cached'};
+  function show(sc){
+    btns.forEach(b=>b.classList.toggle('on',b.dataset.sc===sc));
+    journal.querySelectorAll('.jcall').forEach((d,i)=>{
+      const st=SC[sc].states[i];
+      d.className='jcall '+st;
+      d.querySelector('.st').textContent=STLBL[st];
+    });
+    document.getElementById('resumeCaption').innerHTML=SC[sc].cap;
+  }
+  btns.forEach(b=>b.addEventListener('click',()=>show(b.dataset.sc)));
+  show('same');
+})();
+
+/* ───────────────── 07 patterns ───────────────── */
+const PATTERNS=[
+ {t:'Adversarial verify',tag:'kill the plausible-but-wrong',
+  d:'Spawn N independent skeptics per finding, each prompted to REFUTE it — and to default to refuted when uncertain. Kill anything a majority refutes.',
+  c:"const votes = await parallel(Array.from({ length: 3 }, () => () =>\n  agent('Try to refute: ' + claim + '. Default to refuted=true if uncertain.',\n    { schema: VERDICT })))\nconst survives = votes.filter(Boolean).filter(v => !v.refuted).length >= 2"},
+ {t:'Perspective-diverse verify',tag:'diversity > redundancy',
+  d:'When a finding can fail in more than one way, give each verifier a distinct lens — correctness, security, perf, does-it-reproduce — instead of N identical refuters. Diversity catches failure modes redundancy can’t.',
+  c:"const vs = await parallel(['correctness','security','repro'].map(lens => () =>\n  agent('Judge \"' + b.desc + '\" via the ' + lens + ' lens — real?',\n    { schema: VERDICT })))\nconst real = vs.filter(Boolean).filter(v => v.real).length >= 2"},
+ {t:'Judge panel',tag:'wide solution spaces',
+  d:'Generate N independent attempts from different angles (MVP-first, risk-first, user-first), score with parallel judges, then synthesize from the winner while grafting the best ideas from runners-up. Beats one-attempt-iterated when the solution space is wide.',
+  c:"const attempts = await parallel(ANGLES.map(a => () =>\n  agent('Design the feature, ' + a + '.', { schema: DESIGN })))\nconst scores = await parallel(attempts.map(d => () =>\n  agent('Score this design 1-10 with reasons:\\n' + JSON.stringify(d), { schema: SCORE })))"},
+ {t:'Loop-until-dry',tag:'unknown-size discovery',
+  d:'For discovery with unknown size (bugs, issues, edge cases), keep spawning finders until K consecutive rounds return nothing new. Simple counters miss the tail. Dedup against everything SEEN, not just confirmed — else judge-rejected findings reappear every round and it never converges.',
+  c:"let dry = 0\nwhile (dry < 2) {\n  const found = await round()\n  const fresh = found.filter(b => !seen.has(key(b)))\n  if (!fresh.length) { dry++; continue }\n  dry = 0; fresh.forEach(b => seen.add(key(b)))\n}"},
+ {t:'Multi-modal sweep',tag:'one angle won’t find it all',
+  d:'Parallel agents each searching a different way — by container, by content, by entity, by time. Each is blind to what the others surface; useful when no single search strategy covers the space.',
+  c:"const sweeps = await parallel([\n  () => agent('Search by directory structure: ' + q),\n  () => agent('Search by file content: ' + q),\n  () => agent('Search by symbol/entity names: ' + q),\n  () => agent('Search by recent-change history: ' + q),\n])"},
+ {t:'Completeness critic',tag:'what’s missing?',
+  d:'A final agent that asks: what’s missing — a modality not run, a claim unverified, a source unread? Whatever it finds becomes the next round of work. Pairs with log(): if you bounded coverage anywhere, say so, and let the critic decide if it matters.',
+  c:"const gaps = await agent(\n  'Here is everything we covered:\\n' + JSON.stringify(summary) +\n  '\\nWhat is missing — modality not run, claim unverified, source unread?',\n  { schema: GAPS })\nif (gaps.items.length) { /* feed back into another round */ }"},
+];
+(function(){
+  const grid=document.getElementById('patternsGrid');
+  PATTERNS.forEach((p,i)=>{
+    const d=document.createElement('details');d.className='pat';if(i===0)d.open=true;
+    d.innerHTML='<summary><h4>'+p.t+'</h4><span class="tag">'+p.tag+'</span></summary>'+
+      '<div class="body"><p>'+p.d+'</p><pre class="code"><code>'+hl(p.c)+'</code></pre></div>';
+    grid.appendChild(d);
+  });
+})();
+
+/* ───────────────── 08 built-ins ───────────────── */
+const BUILTINS=[
+ {n:'deep-research',b:'port',run:"omegacode run deep-research --args '\"<question>\"'",
+  f:'Scope, then 5 parallel web searches, fetch and dedup the top sources, 3-vote adversarial verification per claim, cited report.'},
+ {n:'code-review',b:'port',run:"omegacode run code-review --args '{\"target\":\"...\",\"level\":\"high\"}'",
+  f:'One finder per review angle, an independent verifier per finding (CONFIRMED / PLAUSIBLE / REFUTED), a gap-sweep at xhigh/max, ranked report.'},
+ {n:'multi-provider-review',b:'multi',run:"omegacode run multi-provider-review --args '{\"target\":\"...\"}'",
+  f:'Codex and Claude each review the whole branch independently — identical prompts, blind to each other — then a synthesis merges: consensus ranked first, unique catches attributed, disagreements called out. Target defaults to current branch vs merge-base.'},
+ {n:'bake-off',b:'multi',run:"omegacode run bake-off --args '\"<task>\"'",
+  f:'Both providers implement the same task in isolated worktrees (committed work only); blind A/B judges from both providers score the diffs, a tie-break settles splits, the report names what to graft from the loser. Both branches preserved.'},
+ {n:'provider-debate',b:'multi',run:"omegacode run provider-debate --args '\"<question>\"'",
+  f:'One provider proposes, the other attacks, N rounds of rebuttal, then a judge rules: recommendation, survived and conceded points, open questions. Accepts {question, rounds, proposer}.'},
+ {n:'second-opinion',b:'multi',run:"omegacode run second-opinion --args '\"<question>\"'",
+  f:'Both providers answer at low effort. Agree → the merged answer returns cheap. Disagree → both escalate to xhigh with the other’s answer in hand, and an adjudicator decides.'},
+];
+(function(){
+  const g=document.getElementById('builtinsGrid');
+  BUILTINS.forEach(w=>{
+    const d=document.createElement('div');d.className='bi';
+    d.innerHTML='<span class="name">'+w.n+'</span>'+
+      '<span class="badge'+(w.b==='multi'?' multi':'')+'">'+(w.b==='multi'?'multi-provider original':'claude code port')+'</span>'+
+      '<p class="flow">'+w.f+'</p><div class="run">'+esc(w.run)+'</div>';
+    g.appendChild(d);
+  });
+})();
+
+/* ───────────────── 09 CLI table ───────────────── */
+const CLI=[
+ ['omegacode run <file | name>','Execute a workflow. Flags: --args / --args-file, --provider, --model, --effort, --sandbox, --cwd, --concurrency N, --budget N, --resume <runId>, --fake, --json, --open.'],
+ ['omegacode serve','Live read-only web viewer of all runs (--port 4123, --host).'],
+ ['omegacode runs','List runs; --prune --keep <N> trims old ones.'],
+ ['omegacode workflows','List saved/named workflows across project, user, and built-in tiers.'],
+ ['omegacode save <file>','Copy a validated workflow into the user tier under its meta.name (--project for the project tier, --force to overwrite).'],
+ ['omegacode validate <file | name>','Parse + check meta without running anything.'],
+ ['omegacode doctor','Check codex/claude availability, auth, pi binary version, and the data dir.'],
+ ['omegacode install-skill','Install the omegacode skill into agent skill dirs (--claude, --agents).'],
+];
+(function(){
+  const t=document.getElementById('cliTable');
+  CLI.forEach(([c,w])=>{
+    const r=document.createElement('div');r.className='row';
+    r.innerHTML='<span class="cmd">'+esc(c)+'</span><span class="what">'+esc(w)+'</span>';
+    t.appendChild(r);
+  });
+})();
+</script>
+</body>
+</html>
