@@ -5,7 +5,7 @@ import { EventEmitter } from "node:events"
 import { OpencodeWorker, OPENCODE_MIN_VERSION } from "../src/worker/opencode.js"
 import { AgentError, AgentInterrupted, type WorkerProgress } from "../src/worker/index.js"
 import type { SpawnProcess } from "../src/worker/subprocess-jsonl.js"
-import type { AgentSpec } from "../src/dsl/types.js"
+import type { AgentSpec, Effort } from "../src/dsl/types.js"
 
 // ---------------------------------------------------------------------------
 // Scripted spawn harness: each spawn pops the next script off a queue and
@@ -252,13 +252,12 @@ test("exit 0 with no assistant text is no_result; nonzero exit is provider_exit 
   })
 })
 
-test("fail-closed pre-spawn rejections: read-only (with remedy), workspace-write, maxTurns, effort, approval", async () => {
+test("fail-closed pre-spawn rejections: read-only (with remedy), workspace-write, maxTurns, approval", async () => {
   const h = harness([]) // nothing may spawn
   for (const [over, pattern] of [
     [{ sandbox: "read-only" }, /set sandbox: "danger-full-access" to use provider "opencode"/],
     [{ sandbox: "workspace-write" }, /cannot enforce a "workspace-write" sandbox/],
     [{ maxTurns: 5 }, /no enforceable turn cap/],
-    [{ effort: "high" }, /does not support effort/],
     [{ approval: "on-request" }, /cannot surface approval requests/],
   ] as Array<[Partial<AgentSpec>, RegExp]>) {
     await assert.rejects(h.worker.runAgent(spec(over), ctx()), (err: unknown) => {
@@ -269,6 +268,20 @@ test("fail-closed pre-spawn rejections: read-only (with remedy), workspace-write
     })
   }
   assert.equal(h.spawned.length, 0)
+})
+
+test("effort maps to opencode --variant", async () => {
+  const efforts: Effort[] = ["none", "minimal", "low", "medium", "high", "xhigh", "max"]
+  const h = harness([versionOk, ...efforts.map(() => happyRun)])
+
+  for (const effort of efforts) {
+    await h.worker.runAgent(spec({ effort }), ctx())
+    const run = h.spawned.at(-1)
+    assert.ok(run)
+    const variant = run.args.indexOf("--variant")
+    assert.notEqual(variant, -1)
+    assert.deepEqual(run.args.slice(variant, variant + 2), ["--variant", effort])
+  }
 })
 
 test("version preflight: below-minimum binary is refused with provider_outdated", async () => {
@@ -325,6 +338,24 @@ test("schema: silent extraction turn reuses the working session; usage sums; str
   assert.deepEqual(result.usage, { inputTokens: 122, outputTokens: 30, costUsd: 0.012 })
   // The extraction turn is silent: no text/tool progress after the working turn's events.
   assert.equal(c.events.filter((e) => e.kind === "text").length, 1)
+})
+
+test("schema extraction turn preserves effort variant", async () => {
+  const h = harness([
+    versionOk,
+    happyRun,
+    (p) => {
+      p.pushLine({ type: "text", sessionID: "ses_1", part: { text: '{"answer": 42}' } })
+      p.end(0)
+    },
+  ])
+  await h.worker.runAgent(spec({ effort: "max", schema: { type: "object", properties: { answer: { type: "number" } } } }), ctx())
+
+  for (const run of h.spawned.filter((s) => s.args[0] === "run")) {
+    const variant = run.args.indexOf("--variant")
+    assert.notEqual(variant, -1)
+    assert.deepEqual(run.args.slice(variant, variant + 2), ["--variant", "max"])
+  }
 })
 
 test("schema: an unparseable extraction leaves structured undefined (runtime retries)", async () => {

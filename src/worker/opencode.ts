@@ -4,8 +4,7 @@
 // Safety surface (full-access only): opencode has no OS-level sandbox and its app-level permission
 // rules leave bash unconfined, so the ONLY accepted sandbox is danger-full-access (passed through
 // as --dangerously-skip-permissions); read-only and workspace-write are rejected pre-spawn.
-// `effort` is rejected too (opencode's --variant mapping is unverified — silently ignoring effort
-// would also poison resume keys). `instructions` IS supported (as a delimited prompt preamble —
+// `effort` maps to opencode's provider-specific `--variant` flag. `instructions` IS supported (as a delimited prompt preamble —
 // `run` has no system-prompt flag): the runtime's corrective schema retry travels through it.
 //
 // Verified against opencode 1.16.2 (anomalyco/opencode @ e9e2612); older binaries are refused.
@@ -73,13 +72,6 @@ export class OpencodeWorker implements Worker {
         message: "opencode has no enforceable turn cap (its `steps` config is advisory); omit maxTurns or use the claude-code provider",
       })
     }
-    if (spec.effort !== undefined) {
-      throw new AgentError({
-        provider: PROVIDER,
-        code: "unsupported_option",
-        message: "opencode does not support effort yet (its --variant runtime behavior is unverified); omit effort for provider \"opencode\"",
-      })
-    }
     if (spec.sandbox !== "danger-full-access") {
       throw new AgentError({
         provider: PROVIDER,
@@ -103,6 +95,7 @@ export class OpencodeWorker implements Worker {
       // The boolean thinking gate defaults to false in noninteractive mode; without it the JSON
       // stream carries no `reasoning` events at all.
       "--thinking",
+      ...(spec.effort ? ["--variant", spec.effort] : []),
       ...(spec.model ? ["--model", spec.model] : []),
       // danger-full-access is the only sandbox that reaches this point: permission asks would
       // otherwise be auto-REJECTED by noninteractive opencode (fail-closed, but useless).
