@@ -41,6 +41,16 @@ It will author a workflow — finders fan out in parallel, a cross-provider skep
 refute each finding, a synthesizer merges what survives — then run it and report back. Runs are
 journaled and resumable, and `omegacode serve` opens a live dashboard of every agent as it works.
 
+## HTML explainer overview
+
+For a visual walkthrough of the workflow model, open the self-contained
+[HTML explainer](docs/html-explainer/index.html). It traces how `agent()`, `parallel()`,
+`pipeline()`, `phase()`, journaling, resume, and the live viewer fit together.
+
+The companion [built-ins explainer](docs/html-explainer/builtins.html) maps the six bundled
+workflows and shows where each uses fan-out, barriers, verification, cross-provider checks, and
+synthesis.
+
 ## What a workflow looks like
 
 ```js
