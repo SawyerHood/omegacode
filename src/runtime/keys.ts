@@ -148,15 +148,34 @@ const FORBIDDEN = [
   { re: /\bnew\s+Date\s*\(\s*\)/, hint: "new Date()", use: "now()" },
 ]
 
+// The sandbox has no module system and no Node globals; a `require()` or `process.*` reference deep
+// in a branch throws ReferenceError only when reached — possibly after paid agents already ran.
+// Flag them at submit time, same as the determinism rules.
+const NOT_IN_SANDBOX = [
+  { re: /\brequire\s*\(/, hint: "require()", use: "workflows have no module system — inline the logic" },
+  // Only known Node `process` members — a broad `process.\w+` also flagged user objects like
+  // `obj.process.status`, rejecting workflows that never touch the Node global.
+  { re: /\bprocess\s*\.\s*(env|argv|exit|cwd|platform|stdout|stderr|version)\b/, hint: "process.*", use: "pass values in via --args" },
+  { re: /\bmodule\s*\.\s*exports\b/, hint: "module.exports", use: "a top-level return" },
+]
+
 export interface LintFinding {
   token: string
   use: string
 }
 
 export function determinismLint(source: string): LintFinding[] {
+  return lint(source, FORBIDDEN)
+}
+
+export function sandboxLint(source: string): LintFinding[] {
+  return lint(source, NOT_IN_SANDBOX)
+}
+
+function lint(source: string, rules: typeof FORBIDDEN): LintFinding[] {
   const code = stripStringsAndComments(source)
   const findings: LintFinding[] = []
-  for (const f of FORBIDDEN) {
+  for (const f of rules) {
     if (f.re.test(code)) findings.push({ token: f.hint, use: f.use })
   }
   return findings
@@ -167,12 +186,49 @@ export function determinismLint(source: string): LintFinding[] {
  * newlines) so the lint regexes only see executable code. Best-effort lexer: it does not need to be
  * a full JS parser, only good enough that mentioning `Date.now()` inside a string or comment is not
  * a false positive.
+ *
+ * Template-literal interpolations are the one exception: code inside `${...}` is REAL code and must
+ * be preserved (linted), including nested template literals inside it. A context stack tracks whether
+ * we are blanking template text or preserving interpolation code, and a per-interpolation brace depth
+ * finds the matching `}` (object literals / blocks inside the interpolation stay balanced).
+ *
+ * Known limitation: regex literals are NOT stripped, so `/process.env/` in a regex could false-positive.
  */
 function stripStringsAndComments(src: string): string {
   let out = ""
   let i = 0
   const n = src.length
+  // Context stack (bottom is implicit top-level code):
+  //   { kind: "template" }      -> inside a `...` literal; text is blanked, `${` opens an interp
+  //   { kind: "interp", depth } -> inside `${ ... }`; code is PRESERVED, the matching `}` closes it
+  const stack: Array<{ kind: "template" } | { kind: "interp"; depth: number }> = []
   while (i < n) {
+    const frame = stack[stack.length - 1]
+    // Inside a template literal: blank the text, but `${` switches back to (preserved) code.
+    if (frame && frame.kind === "template") {
+      const d = src[i]
+      if (d === "\\") {
+        out += "  "
+        i += 2
+        continue
+      }
+      if (d === "`") {
+        out += " "
+        i++
+        stack.pop()
+        continue
+      }
+      if (d === "$" && src[i + 1] === "{") {
+        out += "  "
+        i += 2
+        stack.push({ kind: "interp", depth: 0 })
+        continue
+      }
+      out += d === "\n" ? "\n" : " "
+      i++
+      continue
+    }
+    // Code mode (top-level, or inside an interpolation): strip comments/strings, preserve the rest.
     const c = src[i]
     const next = src[i + 1]
     if (c === "/" && next === "/") {
@@ -197,7 +253,7 @@ function stripStringsAndComments(src: string): string {
       }
       continue
     }
-    if (c === '"' || c === "'" || c === "`") {
+    if (c === '"' || c === "'") {
       const quote = c
       out += " "
       i++
@@ -217,6 +273,33 @@ function stripStringsAndComments(src: string): string {
         i++
       }
       continue
+    }
+    if (c === "`") {
+      out += " "
+      i++
+      stack.push({ kind: "template" })
+      continue
+    }
+    // Brace tracking only matters inside an interpolation: the matching `}` ends it.
+    if (frame && frame.kind === "interp") {
+      if (c === "{") {
+        frame.depth++
+        out += c
+        i++
+        continue
+      }
+      if (c === "}") {
+        if (frame.depth === 0) {
+          out += " "
+          i++
+          stack.pop()
+          continue
+        }
+        frame.depth--
+        out += c
+        i++
+        continue
+      }
     }
     out += c
     i++

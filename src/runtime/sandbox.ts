@@ -200,6 +200,29 @@ export class WorkflowTimeoutError extends Error {
   }
 }
 
+/**
+ * Compile the workflow body without executing it. Throws WorkflowSyntaxError on invalid JS.
+ * Used by `validate` and at run submit time so syntax errors surface before a run dir exists.
+ */
+export function compileWorkflowBody(body: string, filename: string): Script {
+  // The prefix has NO newlines so the body keeps its original line numbers (parseWorkflow already
+  // replaced the stripped meta region with blank lines). Workflow stack traces then point true.
+  const wrapped = `(async () => { "use strict"; ${body}\n})()`
+  try {
+    return new Script(wrapped, {
+      filename,
+      // Block dynamic import inside workflows.
+      importModuleDynamically: (() => {
+        throw new Error("import() is not available in workflows")
+      }) as unknown as undefined,
+    })
+  } catch (err) {
+    throw new WorkflowSyntaxError(
+      `${(err as Error).message}. Workflow files are plain JavaScript — no TypeScript syntax, no imports.`,
+    )
+  }
+}
+
 /** Run the workflow body and resolve with its return value. */
 export async function runInSandbox(opts: RunInSandboxOptions): Promise<unknown> {
   // An already-aborted signal must not execute even the synchronous portion of the workflow.
@@ -226,23 +249,7 @@ export async function runInSandbox(opts: RunInSandboxOptions): Promise<unknown> 
   // Determinism shims (Date/Math) before user code.
   new Script(DETERMINISM_PRELUDE, { filename: "prelude.js" }).runInContext(context)
 
-  // The prefix has NO newlines so the body keeps its original line numbers (parseWorkflow already
-  // replaced the stripped meta region with blank lines). Workflow stack traces then point true.
-  const wrapped = `(async () => { "use strict"; ${opts.body}\n})()`
-  let script: Script
-  try {
-    script = new Script(wrapped, {
-      filename: opts.filename,
-      // Block dynamic import inside workflows.
-      importModuleDynamically: (() => {
-        throw new Error("import() is not available in workflows")
-      }) as unknown as undefined,
-    })
-  } catch (err) {
-    throw new WorkflowSyntaxError(
-      `${(err as Error).message}. Workflow files are plain JavaScript — no TypeScript syntax, no imports.`,
-    )
-  }
+  const script = compileWorkflowBody(opts.body, opts.filename)
 
   // The vm `timeout` bounds ONLY synchronous execution (until the first await). Async hangs
   // (`await new Promise(() => {})`) would otherwise run forever, so race the workflow promise

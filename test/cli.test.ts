@@ -5,7 +5,7 @@
 
 import { strict as assert } from "node:assert"
 import { execFileSync, spawn } from "node:child_process"
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { get as httpGet } from "node:http"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -378,6 +378,89 @@ describe("CLI end-to-end (--fake)", () => {
     const r = await runCli(["run", wf, "--fake", "--no-serve", "--json", "--args", '{"x":1}'], { OMEGACODE_HOME: home })
     assert.equal(r.code, 0, `stderr=${r.stderr}`)
     assert.equal(JSON.parse(r.stdout).status, "completed")
+  })
+
+  test("validate on a body syntax error exits 1 with a user-facing message, no stack (full-body validate)", async () => {
+    // Full-body validate compiles the body — a TypeScript annotation is not plain JS and must be
+    // caught here (WorkflowSyntaxError → clean message), not at run time after a run dir exists.
+    const bad = join(home, "bad-body-syntax.workflow.js")
+    writeFileSync(bad, `export const meta = { name: "bad", description: "syntax" }\nconst x: string = "a"\nreturn x\n`)
+    const r = await runCli(["validate", bad], { OMEGACODE_HOME: home })
+    assert.equal(r.code, 1)
+    assert.match(r.stderr, /plain JavaScript/)
+    assert.doesNotMatch(r.stderr, /at \w+ \(/) // no stack frames
+  })
+
+  test("validate WARNS (advisory, exit 0) on a sandbox-unavailable global (require)", async () => {
+    // Sandbox-unavailable globals are advisory at validate/submit time: they only throw if the
+    // branch is reached, so a hard failure would reject workflows that never hit the reference.
+    // validate prints a `warn:` line but still exits 0 (run also no longer hard-fails on these).
+    const bad = join(home, "uses-require.workflow.js")
+    writeFileSync(bad, `export const meta = { name: "req", description: "uses require" }\nconst fs = require("fs")\nreturn 1\n`)
+    const r = await runCli(["validate", bad], { OMEGACODE_HOME: home })
+    assert.equal(r.code, 0, `stderr=${r.stderr}`)
+    assert.match(r.stderr, /^warn: require\(\)/m)
+    assert.match(r.stdout, /^ok: "req"/m)
+    assert.doesNotMatch(r.stderr, /at \w+ \(/) // advisory warnings are user-facing, no stack
+  })
+
+  test("validate FAILS (exit 1) on a determinism-lint violation (Date.now)", async () => {
+    // Determinism findings stay fatal at validate time, mirroring the run submit path: they break
+    // replay correctness and the sandbox makes those calls throw.
+    const bad = join(home, "uses-datenow.workflow.js")
+    writeFileSync(bad, `export const meta = { name: "det", description: "uses Date.now" }\nconst t = Date.now()\nreturn t\n`)
+    const r = await runCli(["validate", bad], { OMEGACODE_HOME: home })
+    assert.equal(r.code, 1)
+    assert.match(r.stderr, /^determinism lint failed: Date\.now\(\)/m)
+    assert.doesNotMatch(r.stderr, /at \w+ \(/) // lint findings are user-facing, no stack
+  })
+
+  test("validate on the valid smoke workflow exits 0 and prints ok:", async () => {
+    const r = await runCli(["validate", wf], { OMEGACODE_HOME: home })
+    assert.equal(r.code, 0, `stderr=${r.stderr}`)
+    assert.match(r.stdout, /^ok: "smoke"/m)
+  })
+
+  test("run --fake on a body syntax error exits 1 and creates NO run dir (fails before the run dir exists)", async () => {
+    // A fresh OMEGACODE_HOME: sibling --fake runs populate the shared `home`, so isolate this one to
+    // prove the syntax error fails BEFORE ensureRunDir — no junk failed run left behind.
+    const freshHome = mkdtempSync(join(tmpdir(), "omegacode-syntax-run-"))
+    try {
+      const bad = join(freshHome, "bad-body-syntax.workflow.js")
+      writeFileSync(bad, `export const meta = { name: "bad", description: "syntax" }\nconst x: string = "a"\nreturn x\n`)
+      const r = await runCli(["run", bad, "--fake", "--no-serve"], { OMEGACODE_HOME: freshHome })
+      assert.equal(r.code, 1)
+      assert.match(r.stderr, /plain JavaScript/)
+      const runsDir = join(freshHome, "runs")
+      assert.ok(
+        !existsSync(runsDir) || readdirSync(runsDir).filter((d) => d.startsWith("wf_")).length === 0,
+        "a run dir was created despite the pre-run-dir syntax failure",
+      )
+    } finally {
+      rmSync(freshHome, { recursive: true, force: true })
+    }
+  })
+
+  test("run --fake with a sandbox-unavailable global (process.env) fails AT RUNTIME, not at submit", async () => {
+    // Sandbox globals are no longer rejected at submit time (that wrongly blocked dead code / resumable
+    // runs). `process` is absent from the sandbox context, so `process.env.HOME` throws ReferenceError
+    // when the line executes — the run reaches the sandbox, a run dir IS created, and it fails there.
+    const freshHome = mkdtempSync(join(tmpdir(), "omegacode-sandbox-run-"))
+    try {
+      const bad = join(freshHome, "uses-process.workflow.js")
+      writeFileSync(bad, `export const meta = { name: "proc", description: "uses process" }\nconst x = process.env.HOME\nreturn x\n`)
+      const r = await runCli(["run", bad, "--fake", "--no-serve"], { OMEGACODE_HOME: freshHome })
+      assert.equal(r.code, 1)
+      assert.match(r.stderr, /^failed:/m) // a run-time failure, formatted by the run command
+      assert.match(r.stderr, /process is not defined/) // the sandbox ReferenceError, not a submit lint
+      const runsDir = join(freshHome, "runs")
+      assert.ok(
+        existsSync(runsDir) && readdirSync(runsDir).filter((d) => d.startsWith("wf_")).length === 1,
+        "the run reached the sandbox, so a run dir must exist (failure is at runtime, not submit)",
+      )
+    } finally {
+      rmSync(freshHome, { recursive: true, force: true })
+    }
   })
 })
 

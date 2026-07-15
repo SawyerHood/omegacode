@@ -1,6 +1,8 @@
 import { after, test } from "node:test"
 import assert from "node:assert/strict"
+import { Script } from "node:vm"
 import {
+  compileWorkflowBody,
   parseWorkflow,
   runInSandbox,
   WorkflowSyntaxError,
@@ -116,6 +118,35 @@ test("a non-array meta.phases fails at parse time, not as a TypeError mid-run", 
   // meta crosses the vm boundary, so compare structurally via JSON (not prototype-strict deepEqual).
   const ok = `export const meta = { name: "n", description: "d", phases: [{ title: "Plan" }, {}] }\nreturn 1\n`
   assert.equal(JSON.stringify(parseWorkflow(ok).meta.phases), JSON.stringify([{ title: "Plan" }, {}]))
+})
+
+test("compileWorkflowBody returns a Script for a valid body (no execution)", () => {
+  const { body } = parseWorkflow(`export const meta = { name: "n", description: "d" }\nconst x = 1\nreturn x\n`)
+  const compiled = compileWorkflowBody(body, "wf.js")
+  assert.ok(compiled instanceof Script)
+})
+
+test("compileWorkflowBody rejects TypeScript syntax with the 'plain JavaScript' hint", () => {
+  // Workflows are plain JS — a type annotation must fail to compile at validate/submit time,
+  // not deep inside a run. Assert both the class AND the message (assert.throws's 3rd arg is only
+  // a failure label, so a message check must go through a validator).
+  const { body } = parseWorkflow(`export const meta = { name: "n", description: "d" }\nconst x: string = "a"\nreturn x\n`)
+  let caught: Error | undefined
+  try {
+    compileWorkflowBody(body, "wf.js")
+  } catch (e) {
+    caught = e as Error
+  }
+  assert.ok(caught instanceof WorkflowSyntaxError)
+  assert.match(caught!.message, /plain JavaScript/)
+})
+
+test("compileWorkflowBody rejects `export` inside the body (bodies are not modules)", () => {
+  const { body } = parseWorkflow(`export const meta = { name: "n", description: "d" }\nexport const foo = 1\nreturn 1\n`)
+  assert.throws(
+    () => compileWorkflowBody(body, "wf.js"),
+    (e: unknown) => e instanceof WorkflowSyntaxError && /plain JavaScript/.test((e as Error).message),
+  )
 })
 
 test("runInSandbox runs the body and resolves its return value", async () => {

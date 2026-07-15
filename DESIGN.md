@@ -610,7 +610,8 @@ already reads files). Noted as a future direction.
 This is the **actually shipped** command set (run `omegacode --help`); it is narrower than the original
 sketch. Several originally-designed commands/flags — `omegacode tail`, `omegacode list`, `--resume-last`,
 `--detach`, `--ui`, `--approve`, `--dry-run`, `--verbose`, `--arg k=v`, and a `validate`-time plan/static
-estimate — were **not shipped**. `validate` only parses the file and prints its `meta` (no plan), and
+estimate — were **not shipped**. `validate` parses the file's `meta`, compiles the body (no run),
+fails on the determinism lint, and prints advisory warnings for sandbox-unavailable globals (no plan);
 `doctor` is a binary-presence check (no `--provider` flag).
 
 ```
@@ -623,7 +624,7 @@ omegacode serve [--port 4123] [--host h] [--idle-shutdown]   # read-only viewer 
 omegacode runs [--prune --keep N] [--prune-stale]            # list runs (or prune old / dead ones)
 omegacode workflows [--json]            # list saved/named workflows (project, user, builtin tiers)
 omegacode save <file> [--project] [--force]   # save a workflow into the user (or project) registry
-omegacode validate <file.workflow.js | name>  # parse the file + print its meta (no plan / no run)
+omegacode validate <file.workflow.js | name>  # parse meta + compile body + determinism lint + advisory sandbox warnings (no run)
 omegacode doctor                        # check codex/claude binary presence + print the data dir
 omegacode guide                         # print the authoring guide (the body of skill/SKILL.md)
 omegacode install-skill [--claude] [--agents]   # install skill/SKILL.md into agent skill dirs

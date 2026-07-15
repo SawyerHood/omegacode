@@ -10,6 +10,7 @@ import {
   keyedOpts,
   keyedSpec,
   ROOT_KEY,
+  sandboxLint,
 } from "../src/runtime/keys.ts"
 import type { AgentOpts } from "../src/dsl/types.ts"
 
@@ -153,4 +154,59 @@ test("determinismLint still flags code even when a string also mentions it", () 
 
 test("determinismLint handles escaped quotes inside strings", () => {
   assert.deepEqual(determinismLint('const s = "a \\" Date.now() still in string"'), [])
+})
+
+test("sandboxLint flags sandbox-unavailable globals in real code", () => {
+  // require()/process.*/module.exports throw ReferenceError only when the branch is reached —
+  // possibly after paid agents ran. Flag them statically at submit/validate time.
+  assert.deepEqual(
+    sandboxLint('const fs = require("fs")').map((f) => f.token),
+    ["require()"],
+  )
+  assert.deepEqual(
+    sandboxLint("const key = process.env.FOO").map((f) => f.token),
+    ["process.*"],
+  )
+  assert.deepEqual(
+    sandboxLint("module.exports = 1").map((f) => f.token),
+    ["module.exports"],
+  )
+})
+
+test("sandboxLint does NOT false-positive on strings, templates or comments (L10)", () => {
+  assert.deepEqual(sandboxLint('await agent("use require(x) not process.env.FOO or module.exports")'), [])
+  assert.deepEqual(sandboxLint("const p = `require(x) process.env.Y module.exports`"), [])
+  assert.deepEqual(sandboxLint("// require(x) process.env.Z module.exports = 1"), [])
+  assert.deepEqual(sandboxLint("/* require(x) process.env.Z module.exports */"), [])
+})
+
+test("sandboxLint does NOT false-positive on words that merely contain the tokens", () => {
+  // `reprocess.env` is not a `process.*` reference; a function named `requires(` is not `require(`.
+  assert.deepEqual(sandboxLint("const a = reprocess.env"), [])
+  assert.deepEqual(sandboxLint("function requires(x){ return x }\nrequires(1)"), [])
+})
+
+test("sandboxLint's process rule is narrowed to known Node members (no user-object false-positive)", () => {
+  // `obj.process.status` is a user object, not the Node global — the old broad `process.\w+` rule
+  // wrongly flagged it. Only the known members (env/argv/exit/cwd/platform/stdout/stderr/version) count.
+  assert.deepEqual(sandboxLint("const s = obj.process.status"), [])
+  assert.deepEqual(sandboxLint("const r = result.process.output"), [])
+  // Real Node members are still flagged.
+  assert.deepEqual(sandboxLint("const k = process.env.FOO").map((f) => f.token), ["process.*"])
+  assert.deepEqual(sandboxLint("process.exit(1)").map((f) => f.token), ["process.*"])
+})
+
+test("lint sees code inside template-literal interpolations (${...} is real code)", () => {
+  // (a) a sandbox-unavailable global inside an interpolation must be flagged.
+  assert.deepEqual(sandboxLint("const x = `${process.env.HOME}`").map((f) => f.token), ["process.*"])
+  // (b) a nondeterministic call inside an interpolation must be flagged.
+  assert.deepEqual(determinismLint("const t = `${Date.now()}`").map((f) => f.token), ["Date.now()"])
+})
+
+test("lint does NOT false-positive on a nested template literal's text inside an interpolation", () => {
+  // (c) `require(y)` and `Date.now()` here are TEXT of nested templates (strings), not code — the
+  // interpolation's own code (`cond ? … : …`) is preserved, but the nested template text is blanked.
+  const src = "await agent(`a ${cond ? `require(y)` : `b`} c`)"
+  assert.deepEqual(sandboxLint(src), [])
+  assert.deepEqual(determinismLint("const s = `x ${flag ? `Date.now()` : `y`} z`"), [])
 })

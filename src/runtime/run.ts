@@ -19,7 +19,7 @@ import {
   writeResult,
 } from "./journal.js"
 import { checkProviderModelPair, checkSpecEnum, Runtime } from "./primitives.js"
-import { parseWorkflow } from "./sandbox.js"
+import { compileWorkflowBody, parseWorkflow } from "./sandbox.js"
 import { TerminalRenderer } from "./progress.js"
 import { runInSandbox } from "./sandbox.js"
 
@@ -81,6 +81,9 @@ export async function runWorkflow(opts: RunOptions): Promise<RunOutcome> {
   }
 
   const parsed = parseWorkflow(source)
+  // Compile (without executing) NOW: a body syntax error must fail here, before a run id, run dir,
+  // or journal exists — not deep inside runInSandbox where it leaves a junk failed run behind.
+  compileWorkflowBody(parsed.body, filePath)
   const defaults = resolveDefaults(parsed.meta, opts)
 
   const runId = opts.resumeRunId ?? newRunId()

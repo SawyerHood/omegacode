@@ -6,7 +6,8 @@ import { homedir } from "node:os"
 import { dirname, join, resolve, sep } from "node:path"
 import { fileURLToPath } from "node:url"
 import { runWorkflow, type RunOverrides } from "./runtime/run.js"
-import { parseWorkflow, WorkflowSyntaxError } from "./runtime/sandbox.js"
+import { compileWorkflowBody, parseWorkflow, WorkflowSyntaxError } from "./runtime/sandbox.js"
+import { determinismLint, sandboxLint } from "./runtime/keys.js"
 import { listWorkflows, resolveWorkflowName, WorkflowNotFoundError } from "./runtime/registry.js"
 import { dataRoot, Journal, JournalNotFoundError, ResumePreconditionError } from "./runtime/journal.js"
 import { WorkflowError } from "./runtime/primitives.js"
@@ -475,8 +476,22 @@ async function cmdValidate(flags: Flags): Promise<void> {
     process.exitCode = 1
     return
   }
-  const source = readFileSync(resolveFileOrName(file), "utf8")
-  const { meta } = parseWorkflow(source)
+  const path = resolveFileOrName(file)
+  const source = readFileSync(path, "utf8")
+  // Mirror the run submit path exactly (run.ts): determinism lint is FATAL (it breaks replay
+  // correctness, and the sandbox makes those calls throw), then compile the body for syntax. Only
+  // after those pass do we surface sandbox-unavailable globals — advisory, never fatal, because
+  // they throw only if the branch is actually reached (a `const process`, dead code, or an already
+  // resumable run would be wrongly rejected — see run.ts, which no longer hard-fails on them).
+  const determinismFindings = determinismLint(source)
+  if (determinismFindings.length > 0) {
+    for (const f of determinismFindings) console.error(`determinism lint failed: ${f.token} → use ${f.use}`)
+    process.exitCode = 1
+    return
+  }
+  const { meta, body } = parseWorkflow(source)
+  compileWorkflowBody(body, path)
+  for (const f of sandboxLint(source)) console.error(`warn: ${f.token} — ${f.use}`)
   console.log(`ok: "${meta.name}" — ${meta.description}`)
   if (meta.phases) console.log("phases: " + meta.phases.map((p) => p.title).join(" → "))
 }
@@ -660,7 +675,7 @@ Usage:
   omegacode runs [--prune --keep <N>] [--prune-stale]   List runs (--prune old, --prune-stale dead)
   omegacode workflows [--json]                  List saved/named workflows (project, user, builtin)
   omegacode save <file.workflow.js> [--project] [--force]   Save a workflow under its meta.name
-  omegacode validate <file.workflow.js | name>  Parse + check meta without running
+  omegacode validate <file.workflow.js | name>  Parse meta, compile body + lint without running
   omegacode doctor                              Check codex/claude availability + data dir
   omegacode guide                               Print the full authoring guide (the skill text)
   omegacode install-skill [--claude] [--agents] Install the authoring skill into agent skill dirs
