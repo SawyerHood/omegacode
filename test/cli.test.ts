@@ -134,7 +134,7 @@ describe("isUserFacingError — typed classification (L17)", () => {
   })
   test("JournalNotFoundError / ResumePreconditionError (typo'd --resume) are user-facing", () => {
     assert.equal(isUserFacingError(new JournalNotFoundError("wf_typo")), true)
-    assert.equal(isUserFacingError(new ResumePreconditionError("workflow file changed")), true)
+    assert.equal(isUserFacingError(new ResumePreconditionError("the run args differ from the journaled run")), true)
   })
   test("non-Error values are not user-facing (main prints String(err) for them anyway)", () => {
     assert.equal(isUserFacingError("a string"), false)

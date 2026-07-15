@@ -115,13 +115,23 @@ const baseMeta: JournalMeta = {
   keyVersion: "v2",
 }
 
-test("checkResumePreconditions passes on a matching journal", () => {
-  checkResumePreconditions(baseMeta, { fileHash: "HASH", args: { topic: "x" }, keyVersion: "v2" })
+test("checkResumePreconditions passes (no warnings) on a matching journal", () => {
+  assert.deepEqual(checkResumePreconditions(baseMeta, { fileHash: "HASH", args: { topic: "x" }, keyVersion: "v2" }), [])
 })
 
-test("checkResumePreconditions rejects a changed file hash", () => {
+test("checkResumePreconditions WARNS (not rejects) on a changed file hash", () => {
+  // A file edit is no longer fatal: keys are positional+content, so unchanged agents still replay and
+  // only edited agents re-run. Users can fix a bug mid-workflow instead of re-paying the whole run.
+  const warnings = checkResumePreconditions(baseMeta, { fileHash: "OTHER", args: { topic: "x" }, keyVersion: "v2" })
+  assert.equal(warnings.length, 1)
+  assert.match(warnings[0]!, /workflow file changed/)
+})
+
+test("checkResumePreconditions STILL rejects when args changed even though the file also changed", () => {
+  // Args stay a run-wide invariant: a resume that edits both the file AND the args must error, never
+  // warn-and-proceed (the fileHash warning must not mask an args mismatch).
   assert.throws(
-    () => checkResumePreconditions(baseMeta, { fileHash: "OTHER", args: { topic: "x" }, keyVersion: "v2" }),
+    () => checkResumePreconditions(baseMeta, { fileHash: "OTHER", args: { topic: "y" }, keyVersion: "v2" }),
     ResumePreconditionError,
   )
 })

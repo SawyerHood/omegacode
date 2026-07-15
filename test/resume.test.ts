@@ -382,10 +382,13 @@ interface E2E {
   outcome: Awaited<ReturnType<typeof runWorkflow>>
   cachedCount: number
   ranCount: number
+  /** Resume warnings captured via the onWarn hook (so they never leak to the test's stderr). */
+  warnings: string[]
 }
 
 async function runFile(file: string, opts: { resume?: string; args?: unknown; concurrency?: number } = {}): Promise<E2E> {
   const events: Array<Record<string, unknown>> = []
+  const warnings: string[] = []
   const outcome = await runWorkflow({
     file,
     args: opts.args,
@@ -394,12 +397,16 @@ async function runFile(file: string, opts: { resume?: string; args?: unknown; co
     resumeRunId: opts.resume,
     overrides: opts.concurrency !== undefined ? { concurrency: opts.concurrency } : undefined,
     onEvent: (e) => events.push(e as unknown as Record<string, unknown>),
+    // Capture warnings instead of letting them hit process.stderr — this also exercises the embedder
+    // capture hook (onWarn) that keeps runWorkflow's library surface from writing to the host stderr.
+    onWarn: (m) => warnings.push(m),
   })
   const done = events.filter((e) => e.type === "agent" && e.state === "done")
   return {
     outcome,
     cachedCount: done.filter((e) => e.cached).length,
     ranCount: done.filter((e) => !e.cached).length,
+    warnings,
   }
 }
 
@@ -438,13 +445,47 @@ test("M21: resuming an unknown run id fails loudly and names known runs", async 
   })
 })
 
-test("rec #4: resume rejects when the workflow file changed (fileHash precondition)", async () => {
+test("rec #4 (relaxed): resume PROCEEDS when the workflow file changed — unchanged agents replay, edited ones re-run", async () => {
   await withHome(async (home) => {
     const file = join(home, "wf.js")
     writeFileSync(file, WF)
     const first = await runFile(file)
-    writeFileSync(file, WF + `\n// edited`)
-    await assert.rejects(runFile(file, { resume: first.outcome.runId }), ResumePreconditionError)
+    assert.equal(first.ranCount, 2)
+    // Edit ONLY the second agent's prompt. Because keys are positional+content, agent "one" keeps its
+    // key and replays from the journal, while the edited agent misses the cache and re-runs. Rejecting
+    // this used to force a full re-pay just to fix one late-stage bug.
+    const edited = `export const meta = { name: "t", description: "test workflow" }
+return await parallel([() => agent("one"), () => agent("two-edited")])`
+    writeFileSync(file, edited)
+    const second = await runFile(file, { resume: first.outcome.runId })
+    assert.equal(second.outcome.status, "completed")
+    assert.equal(second.cachedCount, 1, "the unchanged agent should replay from the journal")
+    assert.equal(second.ranCount, 1, "the edited agent should re-run")
+    // The changed file must surface a warning — routed to onWarn (the embedder capture hook), NOT
+    // process.stderr, so a library caller can log/suppress it.
+    assert.equal(second.warnings.length, 1)
+    assert.match(second.warnings[0]!, /workflow file changed/)
+  })
+})
+
+test("e2e: resume warnings route to onWarn (embedder capture hook), never to process.stderr", async () => {
+  await withHome(async (home) => {
+    const file = join(home, "wf.js")
+    writeFileSync(file, WF)
+    const first = await runFile(file)
+    writeFileSync(file, WF + "\n// edited comment (changes fileHash, no agents change)")
+    // A no-op onWarn suppresses the notice entirely; the resume still proceeds and replays cleanly.
+    const captured: string[] = []
+    const outcome = await runWorkflow({
+      file,
+      fake: true,
+      quiet: true,
+      resumeRunId: first.outcome.runId,
+      onWarn: (m) => captured.push(m),
+    })
+    assert.equal(outcome.status, "completed")
+    assert.equal(captured.length, 1)
+    assert.match(captured[0]!, /workflow file changed/)
   })
 })
 

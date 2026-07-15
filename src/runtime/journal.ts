@@ -150,16 +150,28 @@ export class Journal {
 }
 
 /**
- * Verify that a journal can be safely resumed against the current workflow. The cache key scheme
- * already invalidates individual agents whose semantics changed, but the fileHash/args/keyVersion
- * are run-wide invariants: replaying journaled results from a different source file, different args,
- * or an older key version would silently mis-attribute or mis-bill. Fail fast instead.
+ * Verify that a journal can be safely resumed against the current workflow, returning any non-fatal
+ * warnings the caller should surface (empty when the resume is a clean match).
+ *
+ * `args` and `keyVersion` are run-wide invariants whose mismatch would silently mis-attribute or
+ * mis-bill EVERY replayed result, so they stay fatal (ResumePreconditionError). A changed `fileHash`
+ * is NOT fatal: content-keyed agents are positional+content (see keys.ts), so an edited one simply misses
+ * the cache and re-runs while unchanged agents still replay from the journal. Two caveats the warning
+ * below calls out, because keys are per-branch positional+content and do NOT chain off the previous
+ * agent's key/return value: (1) a later agent re-runs only if ITS OWN prompt/opts changed OR it embeds a
+ * changed upstream return value in its prompt — a downstream agent that merely reads an edited agent's
+ * filesystem side effects (not its return value) replays its stale cached result; (2) agents pinned with
+ * opts.key: explicitKey() hashes only the pin (not prompt/opts), so a pinned agent replays its cached
+ * result even across a semantic edit — a documented "stable pin". Rejecting a file edit forced users
+ * to re-pay the whole run to fix one bug, so a mismatch now warns and proceeds instead. We keep the
+ * original fileHash in the journal meta on resume (run.ts only writes meta on a FRESH run) — history is
+ * not rewritten, so a later resume still compares against the run's first-seen file.
  */
 export function checkResumePreconditions(
   meta: JournalMeta | undefined,
   current: { fileHash: string; args: unknown; keyVersion: string },
-): void {
-  if (!meta) return // a journal with no meta (legacy/partial) — nothing to check
+): string[] {
+  if (!meta) return [] // a journal with no meta (legacy/partial) — nothing to check
   // Baseline (v1) journals never wrote keyVersion, so an ABSENT field means v1 — not "skip the
   // check". Skipping would resume with 100% key misses: a full silent re-bill (the C1 failure mode).
   const journaledVersion = meta.keyVersion ?? "v1"
@@ -168,16 +180,23 @@ export function checkResumePreconditions(
       `cannot resume: this run was journaled with key version ${journaledVersion}, but the current scheme is ${current.keyVersion}. Start a fresh run.`,
     )
   }
-  if (meta.fileHash !== current.fileHash) {
-    throw new ResumePreconditionError(
-      "cannot resume: the workflow file has changed since this run was started. Start a fresh run, or revert the file.",
-    )
-  }
+  // Args mismatch stays fatal even when the file ALSO changed: a resume that edits both must error,
+  // never warn-and-proceed. So this check precedes the fileHash warning below.
   if (canonicalArgs(meta.args) !== canonicalArgs(current.args)) {
     throw new ResumePreconditionError(
       "cannot resume: the run args differ from the journaled run. Start a fresh run, or pass the original args.",
     )
   }
+  const warnings: string[] = []
+  if (meta.fileHash !== current.fileHash) {
+    warnings.push(
+      `workflow file changed since run ${meta.runId} — an agent re-runs only if its own prompt/opts ` +
+        `changed (or it embeds a changed upstream result); unchanged agents replay from the journal, ` +
+        `INCLUDING a later agent that only reads an edited agent's file side effects, and agents pinned ` +
+        `with opts.key (which always replay their cached result)`,
+    )
+  }
+  return warnings
 }
 
 function canonicalArgs(value: unknown): string {

@@ -471,8 +471,12 @@ semantics-bearing fields — **`provider`**, `model`, `effort`, `schema`, `sandb
 result (and the suffix after it), which is correct — a Codex result and a Claude result aren't
 interchangeable. On `--resume`, the workflow file is re-run **live**; an `agent()` call whose key matches
 a *completed* journal entry returns its result instantly (no provider turn), and the first call that is
-new/edited/divergent — plus everything after it — runs live. Because keys chain, this is
-automatic: editing step 7 of a 10-step workflow replays 1–6 and runs 7–10. Inside
+new/edited/divergent — plus everything downstream *that consumes its return value* — runs live. So
+editing step 7 of a 10-step workflow re-runs step 7, and re-runs 8–10 only where each *embeds a changed
+upstream result* in its own prompt/opts; a later step that is unchanged (or depends on step 7 only via
+files it wrote, not its return value) still replays its cached result. Keys are per-branch
+positional+content — they do **not** chain off the previous agent's key — so replay follows *content*,
+not a blanket "everything after the edit" suffix. Inside
 `parallel()`/`pipeline()` each branch chains off its structural position (thunk index / item × stage),
 never wall-clock completion order, so fan-out keys stay deterministic under concurrency.
 `agent(prompt, { key })` pins an explicit stable key for a call that should survive reordering or
@@ -501,6 +505,27 @@ on completion/failure (as Claude Code does). Resuming a run whose file was edite
 the chained-key prefix replay is what makes "edit + re-run" cheap. *(`--resume-last` — resume the most
 recent run of the same file — was in an earlier draft but is **not shipped**; pass the explicit `runId`
 printed at the end of the prior run.)*
+
+**Resume preconditions.** Two run-wide invariants stay fatal on resume, because a mismatch would
+silently mis-attribute or mis-bill *every* replayed result: a different **key-scheme version** (a
+changed hashing algorithm), and different **args** (fed into prompts run-wide). A changed **`fileHash`**
+is *not* fatal — editing the workflow is the whole point of resume, and positional+content keys already
+re-run exactly the edited agents while unchanged ones replay. Two caveats, both because keys are
+per-branch positional+content and never chain off the previous agent's key/return value: **(1)** a later
+agent re-runs only if *its own* prompt/opts changed, or it *embeds a changed upstream return value* in
+its prompt — a downstream agent that consumed an edited agent only via **filesystem side effects** (files
+the earlier agent wrote, not its return value) replays its **stale** cached result, so a workspace-write
+fix upstream will not automatically propagate downstream; **(2)** an agent **pinned with `opts.key`** has
+its key hashed from the pin alone (not the prompt/opts), so it replays its cached result even when its
+prompt or schema was edited — the documented "stable pin" tradeoff. To force either to re-run, change the
+consuming agent's prompt (or the pin) or start a fresh run. So a file edit emits a warning (`workflow
+file changed since run <id> — an agent re-runs only if its own prompt/opts changed (or it embeds a
+changed upstream result); unchanged agents replay from the journal, INCLUDING a later agent that only
+reads an edited agent's file side effects, and agents pinned with opts.key`) and proceeds. The warning
+goes to stderr by default; a library caller (`runWorkflow`) can pass `onWarn` to route it into their own
+log/UI or suppress it. The journal meta keeps the run's **original** `fileHash` (meta is written only on
+the first run, never on resume), so history is not rewritten and later resumes still compare against the
+run's first-seen file.
 
 ---
 

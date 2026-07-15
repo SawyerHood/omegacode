@@ -50,6 +50,12 @@ export interface RunOptions {
   quiet?: boolean
   /** Extra event listener (e.g. an embedded UI). */
   onEvent?: EventListener
+  /**
+   * Sink for non-fatal resume warnings (e.g. "workflow file changed"). Embedders that drive
+   * runWorkflow programmatically (viewer server, a UI) pass this to route the message into their own
+   * log/UI, or `() => {}` to suppress it. Defaults to a `warning: <msg>` line on process.stderr.
+   */
+  onWarn?: (message: string) => void
   /** Called once with the runId as soon as the run dir exists (e.g. to print the viewer URL). */
   onStart?: (runId: string) => void
   /** Abort the run programmatically (embedders/tests) — same path as Ctrl-C (SIGINT/SIGTERM). */
@@ -90,8 +96,15 @@ export async function runWorkflow(opts: RunOptions): Promise<RunOutcome> {
     // re-pays the whole workflow with no resume benefit.
     if (!Journal.exists(runId)) throw new JournalNotFoundError(runId, listRunIds())
     loaded = Journal.load(runId)
-    // A journaled result is only safe to replay if the file/args/key-version still match.
-    checkResumePreconditions(loaded.meta, { fileHash, args: opts.args ?? null, keyVersion: KEY_VERSION })
+    // A journaled result is only safe to replay if the args/key-version still match (fatal on
+    // mismatch). A changed file is non-fatal — unchanged agents replay, edited ones re-run — so it
+    // comes back as a warning. Route it to opts.onWarn if the embedder supplied one (their log/UI, or
+    // a no-op to suppress); otherwise emit unconditionally to stderr (even under --quiet/--json): it's
+    // a safety notice, and stderr stays clear of the stdout result.
+    const warn = opts.onWarn ?? ((message: string) => process.stderr.write(`warning: ${message}\n`))
+    for (const warning of checkResumePreconditions(loaded.meta, { fileHash, args: opts.args ?? null, keyVersion: KEY_VERSION })) {
+      warn(warning)
+    }
   }
   const seed = loaded.meta?.seed ?? randomSeed()
   const baseTimeMs = loaded.meta?.createdAt ?? Date.now()
