@@ -106,6 +106,19 @@ test("meta.defaultProvider/defaultModel are both-or-neither at parse time", () =
   assert.equal(parseWorkflow(`export const meta = { name: "n", description: "d" }\nreturn 1\n`).meta.defaultProvider, undefined)
 })
 
+test("meta.defaultProvider 'pi' is accepted WITHOUT defaultModel (the both-or-neither pi exception)", () => {
+  // pi resolves its provider/model/thinking from ~/.pi/agent/settings.json when no model is pinned,
+  // so `defaultProvider: "pi"` alone is a valid workflow default. The other providers stay strict.
+  const lead = `export const meta = { name: "n", description: "d", `
+  const piOnly = parseWorkflow(`${lead}defaultProvider: "pi" }\nreturn 1\n`)
+  assert.equal(piOnly.meta.defaultProvider, "pi")
+  assert.equal(piOnly.meta.defaultModel, undefined)
+  // pi with an explicit model still parses; a strict provider alone still fails; a lone model fails.
+  assert.equal(parseWorkflow(`${lead}defaultProvider: "pi", defaultModel: "m" }\nreturn 1\n`).meta.defaultModel, "m")
+  assert.throws(() => parseWorkflow(`${lead}defaultProvider: "opencode" }\nreturn 1\n`), /must be specified together/)
+  assert.throws(() => parseWorkflow(`${lead}defaultModel: "gpt-5.5" }\nreturn 1\n`), /must be specified together/)
+})
+
 test("a non-array meta.phases fails at parse time, not as a TypeError mid-run", () => {
   // A non-iterable container would otherwise crash the Runtime constructor's declared-phase
   // loop after the run dir/journal already exist (burned run id, no terminal run event).

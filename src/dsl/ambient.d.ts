@@ -35,9 +35,16 @@ declare global {
   }
 
   /** provider and model travel together (both-or-neither): a lone provider would inherit a model
-   *  meant for a different provider from the run defaults. Set both, or omit both. */
+   *  meant for a different provider from the run defaults. Set both, or omit both. The one
+   *  exception is `provider: "pi"`, which may be set alone — pi resolves its provider/model/thinking
+   *  from ~/.pi/agent/settings.json when no pi model is pinned by the run (a bare `{ provider: "pi" }`
+   *  under a pi run default that pins a model inherits that model instead). A lone `model` stays rejected. */
   type OmegacodeAgentOpts = OmegacodeAgentBaseOpts &
-    ({ provider: OmegacodeProviderId; model: string } | { provider?: never; model?: never })
+    (
+      | { provider: "pi"; model?: string }
+      | { provider: Exclude<OmegacodeProviderId, "pi">; model: string }
+      | { provider?: never; model?: never }
+    )
 
   type OmegacodePipelineStage = (
     prev: unknown,

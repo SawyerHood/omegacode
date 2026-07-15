@@ -67,6 +67,8 @@ describe("ambient d.ts is self-contained (M31)", () => {
           '/// <reference path="./ambient.d.ts" />',
           "const f = async () => {",
           '  const text = await agent("hi", { provider: "codex", model: "gpt-5.5", effort: "none", worktree: true })',
+          "  // provider: 'pi' is the both-or-neither exception — it may be set WITHOUT a model (no error)",
+          '  void agent("hi", { provider: "pi" })',
           "  // @ts-expect-error — provider without model violates the both-or-neither pair type",
           '  void agent("hi", { provider: "codex" })',
           "  // @ts-expect-error — model without provider violates the both-or-neither pair type",

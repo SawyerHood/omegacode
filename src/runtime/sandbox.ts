@@ -4,6 +4,7 @@
 
 import { Script, createContext, type Context } from "node:vm"
 import type { Meta, WorkflowGlobals } from "../dsl/types.js"
+import { resolvesOwnModel } from "../dsl/types.js"
 
 export class WorkflowSyntaxError extends Error {
   constructor(message: string) {
@@ -98,10 +99,14 @@ function validateMeta(v: unknown): asserts v is Meta {
   if (o.phases !== undefined && !Array.isArray(o.phases)) throw new WorkflowSyntaxError("meta.phases must be an array")
   // Both-or-neither (see ProviderModelPair): a lone defaultModel would pair with a provider chosen
   // elsewhere — a model meant for a different provider. Failing here means `omegacode validate`
-  // catches it without a run, before resolveDefaults re-checks at run time.
-  if ((o.defaultProvider === undefined) !== (o.defaultModel === undefined)) {
+  // catches it without a run, before resolveDefaults re-checks at run time. The `pi` provider is the
+  // one exception: `defaultProvider: "pi"` with no defaultModel is allowed, because pi resolves its
+  // provider/model/thinking from ~/.pi/agent/settings.json when no model is pinned (resolveDefaults
+  // keeps that model site-atomic, so pi never inherits a model meant for another provider).
+  const lonePi = resolvesOwnModel(o.defaultProvider) && o.defaultModel === undefined
+  if (!lonePi && (o.defaultProvider === undefined) !== (o.defaultModel === undefined)) {
     throw new WorkflowSyntaxError(
-      "meta.defaultProvider and meta.defaultModel must be specified together (set both, or omit both)",
+      "meta.defaultProvider and meta.defaultModel must be specified together (set both, or omit both; the \"pi\" provider is the exception — it resolves its model from ~/.pi/agent/settings.json)",
     )
   }
 }

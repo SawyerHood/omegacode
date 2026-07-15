@@ -251,6 +251,14 @@ schema?: JSONSchema, worktree?: boolean | string, key?: string, maxTurns?: numbe
   so a model meant for one provider can never pair with a provider chosen at a different site
   (a real run leaked a run-wide `gpt-5.5` into a per-call `claude-code` override this way).
   Model *strings* stay open — each backend is authoritative; only the pairing is validated.
+  **The `pi` provider is the exception**: `provider: "pi"` may be set *without* a model, because pi
+  resolves its provider/model/thinking from `~/.pi/agent/settings.json` when `--model` is omitted
+  (§6, `worker/pi.ts` deliberately omits `--model` for an undefined `spec.model`). The cross-provider
+  leak stays closed even so: when a call/site pins a provider that DIFFERS from the run default, the
+  model comes only from that same site — a per-call `{ provider: "pi" }` under a `codex`/`gpt-5.5`
+  run default resolves to `model: undefined`, never inheriting `gpt-5.5`. Same-provider pinning
+  (`{ provider: "pi" }` under a `pi` run default) still inherits that run's model — same backend, no
+  mix. A lone `model` (any provider) stays rejected.
 - `schema` → the provider's native structured output (Codex `outputSchema` / Claude `outputFormat`),
   re-validated client-side (§6.3).
 - `sandbox`/`approval` map per provider (§6.4); `effort` maps natively on Codex, best-effort on Claude
@@ -261,7 +269,8 @@ schema?: JSONSchema, worktree?: boolean | string, key?: string, maxTurns?: numbe
   chained key — `provider` and the other semantics-bearing opts do.)
 
 The `meta` block may set `defaultProvider` + `defaultModel` (together — both-or-neither, enforced
-at parse time so `validate` catches it) and `defaultSandbox` for the whole workflow. The
+at parse time so `validate` catches it; the `pi` exception applies here too — `defaultProvider: "pi"`
+may omit `defaultModel`) and `defaultSandbox` for the whole workflow. The
 file is **not** an importable module — there is no `defineWorkflow`/default-export wiring, because the
 sandbox (§5) has no module loader; the `export const meta` statement is the one piece read statically
 (its pure-literal form enforced), and the body runs against injected globals. Schemas are plain JSON
@@ -600,7 +609,10 @@ already reads files). Noted as a future direction.
   (`--provider`/`--model`/`--effort`/`--sandbox`/`--cwd`/`--concurrency`/`--budget`), then `meta`
   (`defaultProvider`/`defaultModel`/`defaultSandbox`), then the built-in `DEFAULTS`
   (`provider: codex`, `sandbox: read-only`, `approval: never`, `concurrency: 100`,
-  `maxAgents: 1000`, `maxFanout: 4096`). The codex app-server binary can be overridden via the `CODEX_BIN`
+  `maxAgents: 1000`, `maxFanout: 4096`). Because the (provider, model) pair resolves site-atomically,
+  `--provider pi` alone overrides the whole meta pair — it drops `meta.defaultModel` and defers to
+  `~/.pi/agent/settings.json`, unlike a per-call `{ provider: "pi" }` under a pi run default, which
+  inherits that run's model. The codex app-server binary can be overridden via the `CODEX_BIN`
   environment variable, and the data dir (default `~/.omegacode`) via `OMEGACODE_HOME`.
 
 ---
@@ -630,7 +642,8 @@ omegacode install-skill [--claude] [--agents]   # install skill/SKILL.md into ag
 ```
 
 `--provider` sets the **default** worker for the run and must be paired with `--model`
-(both-or-neither, like every other provider/model site); individual `agent()` calls override the
+(both-or-neither, like every other provider/model site — except `--provider pi`, which may omit
+`--model` and inherit it from `~/.pi/agent/settings.json`); individual `agent()` calls override the
 pair via `opts.provider` + `opts.model`. By default `run` auto-starts the viewer and prints the run's URL; `--open` also launches
 the browser, `--no-serve` opts out, and `--json` keeps stdout pure JSON (the URL moves to a `url` field).
 On completion *or* failure, `run` prints the `runId` and the exact `--resume` command. `--fake` swaps in

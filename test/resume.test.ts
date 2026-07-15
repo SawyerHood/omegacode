@@ -570,6 +570,30 @@ test("--provider/--model overrides are both-or-neither, before the run dir exist
   })
 })
 
+test("a bare --provider pi is accepted and does NOT leak meta.defaultModel across providers", async () => {
+  // resolveDefaults composes the CLI site over the meta site. With the pi exception a site may now
+  // carry a provider WITHOUT a model, so the model must stay SITE-ATOMIC: `--provider pi` over a
+  // meta `{defaultProvider:'codex', defaultModel:'gpt-5.5'}` must resolve to model=undefined, not
+  // leak the codex model onto pi. Asserted at the agent event (carries the resolved provider/model).
+  await withHome(async (home) => {
+    const file = join(home, "wf.js")
+    writeFileSync(
+      file,
+      `export const meta = { name: "t", description: "d", defaultProvider: "codex", defaultModel: "gpt-5.5" }\n` +
+        `return await agent("hi")\n`,
+    )
+    const out = await runWorkflow({ file, fake: true, quiet: true, overrides: { provider: "pi" } })
+    assert.equal(out.status, "completed")
+    const lines = readFileSync(join(process.env.OMEGACODE_HOME!, "runs", out.runId, "events.jsonl"), "utf8")
+      .trim()
+      .split("\n")
+      .map((l) => JSON.parse(l) as Record<string, unknown>)
+    const agentEvent = lines.find((e) => e.type === "agent" && e.provider === "pi")
+    assert.ok(agentEvent, "no agent event ran under provider pi")
+    assert.equal(agentEvent.model, undefined, "meta.defaultModel (gpt-5.5) leaked onto the pi call")
+  })
+})
+
 test("a journaled failure in a parallel branch re-runs on resume (rec #4)", async () => {
   await withHome(async (home) => {
     const runId = "wf_fail"

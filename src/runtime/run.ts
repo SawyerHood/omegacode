@@ -202,14 +202,17 @@ function resolveDefaults(meta: { defaultProvider?: ProviderId; defaultModel?: st
   const provider = o.provider ?? meta.defaultProvider ?? DEFAULTS.provider
   checkSpecEnum("provider", provider)
   // Both-or-neither per SITE (CLI flags, meta defaults): a lone --model would pair with a provider
-  // chosen elsewhere — the gpt-5.5→claude-code leak. Each site supplies the pair atomically, so the
-  // field-wise resolution below can never mix a provider from one site with a model from another.
+  // chosen elsewhere — the gpt-5.5→claude-code leak. Each site supplies the pair atomically.
   // (parseWorkflow validates the meta site too, so `omegacode validate` catches it without a run.)
+  // The pi exception means a site may now legitimately carry a provider WITHOUT a model — so the
+  // model must be resolved from the SAME site that owns the provider, never `o.model ?? meta.model`
+  // (which would leak meta.defaultModel into a bare `--provider pi`, mixing a codex model onto pi).
   checkProviderModelPair(o.provider, o.model, "--provider/--model")
   checkProviderModelPair(meta.defaultProvider, meta.defaultModel, "meta.defaultProvider/defaultModel")
+  const model = o.provider !== undefined ? o.model : meta.defaultProvider !== undefined ? meta.defaultModel : undefined
   return {
     provider,
-    model: o.model ?? meta.defaultModel,
+    model,
     effort: o.effort,
     sandbox,
     approval: DEFAULTS.approval,

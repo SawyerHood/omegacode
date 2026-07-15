@@ -65,7 +65,9 @@ Code, OpenCode, or pi agent; omit `provider`/`model` to inherit whatever the run
 (`--provider --model`, default `codex`), or pin them per call when you want cross-provider
 diversity. Provider and model are **both-or-neither** at every site (per-call, meta defaults,
 CLI flags): a lone `provider:` or `model:` is rejected, so a model meant for one provider can
-never silently ride another provider's call.
+never silently ride another provider's call. The one exception is `pi`: a bare `provider: "pi"`
+(or `--provider pi`) is allowed, and pi then resolves the model from `~/.pi/agent/settings.json` —
+unless a pi model is pinned at the same or an owning site, which it uses instead.
 
 ## CLI
 

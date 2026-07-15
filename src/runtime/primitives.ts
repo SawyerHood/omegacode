@@ -18,7 +18,7 @@ import type {
   RunDefaults,
   WorkflowGlobals,
 } from "../dsl/types.js"
-import { addUsage, emptyUsage, PROVIDER_IDS } from "../dsl/types.js"
+import { addUsage, emptyUsage, PROVIDER_IDS, resolvesOwnModel } from "../dsl/types.js"
 import type { WorkerFactory, WorkerProgress } from "../worker/index.js"
 import { AgentError, AgentInterrupted } from "../worker/index.js"
 import { withRetry } from "../worker/errors.js"
@@ -66,13 +66,22 @@ export function checkSpecEnum(field: keyof typeof SPEC_ENUMS, value: string | un
  * provider (a real run passed a run-wide gpt-5.5 to a per-call claude-code override that way);
  * a lone `model` is the same leak from the other side. Model strings themselves stay open
  * (each backend is authoritative) — this validates pairing, never model content.
+ *
+ * The `pi` provider is the ONE exception: `{ provider: "pi" }` with no model is allowed, because pi
+ * is designed to resolve its provider/model/thinking from ~/.pi/agent/settings.json when --model is
+ * omitted (see worker/pi.ts, which deliberately omits --model for an undefined spec.model). Pinning
+ * pi without a model is therefore the intended way to inherit those local settings; the cross-provider
+ * leak the rule guards against is closed separately in resolveSpec/resolveDefaults (a differing-provider
+ * call/site never inherits the other half's model). A lone `model` (any provider) stays rejected.
  */
 export function checkProviderModelPair(provider: string | undefined, model: string | undefined, site: string): void {
   if ((provider === undefined) === (model === undefined)) return
-  const given = provider !== undefined ? `provider "${provider}" without model` : `model "${model}" without provider`
-  throw new WorkflowError(
-    `${site}: ${given} — provider and model must be specified together (set both, or omit both to inherit the run defaults)`,
-  )
+  if (resolvesOwnModel(provider) && model === undefined) return // pi resolves its model from ~/.pi/agent/settings.json
+  const given =
+    provider !== undefined
+      ? `provider "${provider}" without model — provider and model must be specified together (set both, or omit both to inherit the run defaults; the "pi" provider is the exception — it may be set alone and resolves its model from ~/.pi/agent/settings.json)`
+      : `model "${model}" without provider — provider and model must be specified together (set both, or omit both to inherit the run defaults)`
+  throw new WorkflowError(`${site}: ${given}`)
 }
 
 export interface RuntimeOpts {
@@ -227,7 +236,15 @@ export class Runtime {
     const spec: AgentSpec = {
       prompt,
       provider: opts?.provider ?? d.provider,
-      model: opts?.model ?? d.model,
+      // Cross-provider calls must NOT inherit the run-default model — that is the leak the pairing
+      // rule guards against (a run-wide gpt-5.5 riding a per-call claude-code override). So when the
+      // call pins a provider that DIFFERS from the run default, the model comes only from the call
+      // site: for `{ provider: "pi" }` with no model that resolves to undefined, and the pi worker
+      // then omits --model so pi reads provider/model/thinking from ~/.pi/agent/settings.json.
+      // Same-provider (or no per-call provider) keeps the old default-model inheritance: pinning
+      // `{ provider: "pi" }` under a pi run-default still inherits that run's model — same backend,
+      // no cross-provider mix — which is the correct/expected behavior.
+      model: opts?.provider !== undefined && opts.provider !== d.provider ? opts.model : (opts?.model ?? d.model),
       effort: opts?.effort ?? d.effort,
       cwd: opts?.cwd ?? d.cwd,
       sandbox: opts?.sandbox ?? d.sandbox,

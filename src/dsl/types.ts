@@ -4,6 +4,19 @@
 export const PROVIDER_IDS = ["codex", "claude-code", "opencode", "pi"] as const
 export type ProviderId = (typeof PROVIDER_IDS)[number]
 
+/**
+ * True for a provider that may be specified WITHOUT a model — the both-or-neither exception. Such a
+ * provider resolves its own provider/model/thinking from local config (`pi` reads
+ * ~/.pi/agent/settings.json when --model is omitted; see worker/pi.ts), so a bare `{ provider }` is
+ * legitimate. This is the one capability behind every `provider === "pi"` model-optionality check;
+ * route those literals through here. (The cross-provider leak the pairing rule guards against stays
+ * closed separately, site-atomically, in resolveSpec/resolveDefaults — those sites are
+ * provider-agnostic and do NOT consult this predicate.)
+ */
+export function resolvesOwnModel(provider: unknown): boolean {
+  return provider === "pi"
+}
+
 /** read-only: no writes; workspace-write: write within cwd; danger-full-access: unrestricted. */
 export type Sandbox = "read-only" | "workspace-write" | "danger-full-access"
 
@@ -21,9 +34,15 @@ export type JSONSchema = Record<string, unknown>
  * used to inherit the run-default `model` — a model meant for a DIFFERENT provider (a real run
  * passed gpt-5.5 to claude-code that way). Pairing them at every specification site (per-call
  * opts, meta defaults, CLI flags) makes that mix impossible; model strings themselves stay open.
+ *
+ * The `pi` provider is the exception: `{ provider: "pi" }` may omit the model, because pi resolves
+ * its provider/model/thinking from ~/.pi/agent/settings.json when no pi model is pinned by the run
+ * (a bare `{ provider: "pi" }` under a pi run default that pins a model inherits that model instead).
+ * The other providers stay strict; a lone `model` (any provider) stays rejected.
  */
 export type ProviderModelPair =
-  | { provider: ProviderId; model: string }
+  | { provider: "pi"; model?: string }
+  | { provider: Exclude<ProviderId, "pi">; model: string }
   | { provider?: never; model?: never }
 
 /** Options an author passes to `agent()`. All optional; defaults come from meta/config/CLI. */
@@ -89,7 +108,8 @@ export interface AgentResult {
 }
 
 /** The `meta` literal at the top of a workflow file. defaultProvider/defaultModel follow the
- *  same both-or-neither rule as agent() opts (see ProviderModelPair). */
+ *  same both-or-neither rule as agent() opts (see ProviderModelPair) — including the `pi` exception:
+ *  `defaultProvider: "pi"` may omit defaultModel (pi reads it from ~/.pi/agent/settings.json). */
 interface MetaBase {
   name: string
   description: string
@@ -100,7 +120,8 @@ interface MetaBase {
 
 export type Meta = MetaBase &
   (
-    | { defaultProvider: ProviderId; defaultModel: string }
+    | { defaultProvider: "pi"; defaultModel?: string }
+    | { defaultProvider: Exclude<ProviderId, "pi">; defaultModel: string }
     | { defaultProvider?: never; defaultModel?: never }
   )
 

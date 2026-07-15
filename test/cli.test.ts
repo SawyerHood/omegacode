@@ -280,6 +280,32 @@ describe("CLI end-to-end (--fake)", () => {
     assert.match(m.stderr, /model "gpt-5.5" without provider — provider and model must be specified together/)
   })
 
+  test("--provider pi without --model is accepted (pi inherits its model from ~/.pi/agent/settings.json)", async () => {
+    const r = await runCli(["run", wf, "--provider", "pi", "--fake", "--no-serve", "--json"], { OMEGACODE_HOME: home })
+    assert.equal(r.code, 0, `stderr=${r.stderr}`)
+    assert.equal(JSON.parse(r.stdout).status, "completed")
+  })
+
+  test("meta.defaultProvider pi without defaultModel is accepted (pi is the both-or-neither exception)", async () => {
+    const piMeta = join(home, "pi-default.workflow.js")
+    writeFileSync(
+      piMeta,
+      `export const meta = { name: "pi-default", description: "pi inherits its model", defaultProvider: "pi" }\n` +
+        `return await agent("say hi")\n`,
+    )
+    const r = await runCli(["run", piMeta, "--fake", "--no-serve", "--json"], { OMEGACODE_HOME: home })
+    assert.equal(r.code, 0, `stderr=${r.stderr}`)
+    assert.equal(JSON.parse(r.stdout).status, "completed")
+  })
+
+  test("a lone --provider stays rejected for the strict providers (pi is the only exception)", async () => {
+    for (const provider of ["codex", "claude-code", "opencode"]) {
+      const r = await runCli(["run", wf, "--provider", provider, "--fake", "--no-serve"], { OMEGACODE_HOME: home })
+      assert.equal(r.code, 1, `provider ${provider} should require a model; stderr=${r.stderr}`)
+      assert.match(r.stderr, /without model — provider and model must be specified together/)
+    }
+  })
+
   test("doctor resolves bins via env overrides and flags below-minimum versions as OUTDATED", { skip: process.platform === "win32" }, async () => {
     // Stub binaries: opencode reports an outdated version, pi a current one.
     const ocStub = join(home, "fake-opencode")

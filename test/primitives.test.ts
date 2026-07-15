@@ -11,7 +11,7 @@ import { runInSandbox } from "../src/runtime/sandbox.ts"
 import type { EventSink, WorkflowEventInput } from "../src/runtime/events.ts"
 import type { Worker, WorkerContext, WorkerFactory } from "../src/worker/index.ts"
 import { AgentError, AgentInterrupted } from "../src/worker/index.ts"
-import { DEFAULTS, emptyUsage, type AgentResult, type AgentSpec, type RunDefaults } from "../src/dsl/types.ts"
+import { DEFAULTS, emptyUsage, resolvesOwnModel, type AgentResult, type AgentSpec, type RunDefaults } from "../src/dsl/types.ts"
 
 // ---- test harness ----------------------------------------------------------------------------
 
@@ -668,6 +668,47 @@ test("provider/model are both-or-neither in agent() opts (a lone half must not m
     await runBody(b, `return await agent("z")`)
     assert.equal(b.worker.calls.at(-1)?.provider, "codex")
     assert.equal(b.worker.calls.at(-1)?.model, "gpt-5.5")
+  } finally {
+    b.cleanup()
+  }
+})
+
+test("pi: {provider:'pi'} without model is accepted and does NOT leak the run-default model (cross-provider)", async () => {
+  // Regression: pi is DESIGNED to inherit provider/model/thinking from ~/.pi/agent/settings.json when
+  // no model is pinned (worker/pi.ts omits --model for an undefined spec.model). Pinning pi per-call
+  // under a DIFFERENT run default must therefore be accepted AND must not inherit that default's model
+  // — otherwise a run-wide gpt-5.5 (codex) would leak onto the pi call, the exact cross-provider mix
+  // the both-or-neither rule guards against.
+  // The model-optionality above is governed by ONE predicate (resolvesOwnModel), not scattered
+  // literal "pi" checks: pi may omit its model, its sibling providers may not.
+  assert.equal(resolvesOwnModel("pi"), true)
+  assert.equal(resolvesOwnModel("codex"), false)
+  const b = build({ defaults: { provider: "codex", model: "gpt-5.5" } })
+  try {
+    const out = await runBody(b, `return await agent("x", { provider: "pi" })`)
+    assert.equal(out, "echo:x")
+    const seen = b.worker.calls.at(-1)!
+    assert.equal(seen.provider, "pi")
+    assert.equal(seen.model, undefined) // resolved spec model is undefined — no gpt-5.5 leak
+    // An explicit pin still passes the model through untouched.
+    await runBody(b, `return await agent("y", { provider: "pi", model: "openrouter/moonshotai/kimi-k2.6" })`)
+    assert.equal(b.worker.calls.at(-1)!.model, "openrouter/moonshotai/kimi-k2.6")
+    // The other providers keep strict both-or-neither: a lone provider is still rejected, and a lone
+    // model (even for pi's sibling providers) stays rejected too.
+    await assert.rejects(runBody(b, `return await agent("z", { provider: "claude-code" })`), /provider "claude-code" without model/)
+    await assert.rejects(runBody(b, `return await agent("z", { model: "claude-fable-5" })`), /model "claude-fable-5" without provider/)
+  } finally {
+    b.cleanup()
+  }
+})
+
+test("pi: same-provider pin inherits the run-default model (no cross-provider mix)", async () => {
+  // When the run default IS pi, pinning {provider:'pi'} pins the SAME backend, so inheriting that
+  // run's model is correct — no cross-provider leak. (Documented in resolveSpec.)
+  const b = build({ defaults: { provider: "pi", model: "openrouter/moonshotai/kimi-k2.6" } })
+  try {
+    await runBody(b, `return await agent("x", { provider: "pi" })`)
+    assert.equal(b.worker.calls.at(-1)!.model, "openrouter/moonshotai/kimi-k2.6")
   } finally {
     b.cleanup()
   }
