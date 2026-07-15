@@ -1,4 +1,4 @@
-import { test } from "node:test"
+import { after, test } from "node:test"
 import assert from "node:assert/strict"
 import { EventEmitter } from "node:events"
 import { tmpdir } from "node:os"
@@ -7,6 +7,12 @@ import { PiWorker, PI_MIN_VERSION } from "../src/worker/pi.js"
 import { AgentError, AgentInterrupted, type WorkerProgress } from "../src/worker/index.js"
 import type { SpawnProcess } from "../src/worker/subprocess-jsonl.js"
 import type { AgentSpec, Effort } from "../src/dsl/types.js"
+
+// The stall-watchdog test awaits a rejection driven by an unref'd timer while the only "process"
+// alive is a FakeProc with no real handles — keep the loop referenced (same rationale as
+// subprocess-jsonl.test.ts).
+const keepAlive = setInterval(() => {}, 60_000)
+after(() => clearInterval(keepAlive))
 
 // Scripted spawn harness (same shape as opencode-worker.test.ts).
 
@@ -65,19 +71,19 @@ const versionOk: Script = (p) => {
   p.end(0)
 }
 
-function harness(scripts: Script[]): { worker: PiWorker; spawned: SpawnCall[] } {
+function harness(scripts: Script[], opts: { stallTimeoutMs?: number } = {}): { worker: PiWorker; spawned: SpawnCall[] } {
   const spawned: SpawnCall[] = []
   const queue = [...scripts]
-  const spawnProcess: SpawnProcess = (bin, args, opts) => {
+  const spawnProcess: SpawnProcess = (bin, args, o) => {
     const proc = new FakeProc()
-    const call: SpawnCall = { bin, args, cwd: opts.cwd, env: opts.env, proc }
+    const call: SpawnCall = { bin, args, cwd: o.cwd, env: o.env, proc }
     spawned.push(call)
     const script = queue.shift()
     assert.ok(script, `unexpected spawn #${spawned.length}: ${bin} ${args.join(" ")}`)
     queueMicrotask(() => script(proc, call))
     return proc as any
   }
-  return { worker: new PiWorker({ spawnProcess }), spawned }
+  return { worker: new PiWorker({ spawnProcess, ...opts }), spawned }
 }
 
 function ctx(signal?: AbortSignal): { signal: AbortSignal; onProgress: (e: WorkerProgress) => void; events: WorkerProgress[] } {
@@ -279,12 +285,11 @@ test("exit 0 with no assistant text is no_result", async () => {
   await assert.rejects(h.worker.runAgent(spec(), ctx()), (err: unknown) => err instanceof AgentError && err.code === "no_result")
 })
 
-test("fail-closed pre-spawn rejections: read-only (with remedy), workspace-write, maxTurns, approval", async () => {
+test("fail-closed pre-spawn rejections: read-only (with remedy), workspace-write, approval", async () => {
   const h = harness([])
   for (const [over, pattern] of [
     [{ sandbox: "read-only" }, /set sandbox: "danger-full-access" to use provider "pi"/],
     [{ sandbox: "workspace-write" }, /cannot enforce a "workspace-write" sandbox/],
-    [{ maxTurns: 3 }, /no native turn cap/],
     [{ approval: "on-request" }, /cannot surface approval requests/],
   ] as Array<[Partial<AgentSpec>, RegExp]>) {
     await assert.rejects(h.worker.runAgent(spec(over), ctx()), (err: unknown) => {
@@ -295,6 +300,84 @@ test("fail-closed pre-spawn rejections: read-only (with remedy), workspace-write
     })
   }
   assert.equal(h.spawned.length, 0)
+})
+
+// ---------------------------------------------------------------------------
+// Runaway-agent protection: client-side turn cap + no-output stall watchdog.
+
+// Each assistant message_end is one agent-loop round; the LAST message's text is the result.
+const round = (n: number): Record<string, unknown> => ({ type: "message_end", message: assistantMessage(`round ${n}`) })
+
+test("client-side turn cap: exceeding maxTurns kills the subprocess with non-retryable error_max_turns", async () => {
+  // maxTurns=2 with a loop that keeps producing rounds: the 3rd assistant message_end trips the cap.
+  const h = harness([
+    versionOk,
+    (p) => {
+      p.pushLine(round(1))
+      p.pushLine(round(2))
+      p.pushLine(round(3)) // one past the cap → killed here
+      p.pushLine(round(4)) // ignored: the run already settled
+      p.end(0)
+    },
+  ])
+  await assert.rejects(h.worker.runAgent(spec({ maxTurns: 2 }), ctx()), (err: unknown) => {
+    assert.ok(err instanceof AgentError)
+    assert.equal(err.code, "error_max_turns")
+    assert.equal(err.retryable, false) // a runaway must never be retried into another runaway
+    assert.match(err.message, /2-turn cap/)
+    // Failed turns still bill: usage rides the error so budget ceilings see the burned tokens.
+    // Three rounds folded at 56 input / 10 output / 0.02 cost each.
+    assert.deepEqual(err.usage, { inputTokens: 168, outputTokens: 30, costUsd: 0.06 })
+    return true
+  })
+  // The runaway subprocess is killed, not left spinning.
+  assert.deepEqual(h.spawned[1]!.proc.kills, ["SIGTERM"])
+})
+
+test("turn cap is EXCEEDS, not reaches: a run that uses exactly maxTurns rounds succeeds", async () => {
+  const h = harness([
+    versionOk,
+    (p) => {
+      p.pushLine(round(1))
+      p.pushLine(round(2))
+      p.end(0)
+    },
+  ])
+  const result = await h.worker.runAgent(spec({ maxTurns: 2 }), ctx())
+  assert.equal(result.text, "round 2")
+  assert.deepEqual(h.spawned[1]!.proc.kills, [])
+})
+
+test("maxTurns undefined keeps the loop uncapped: many rounds complete normally", async () => {
+  const h = harness([
+    versionOk,
+    (p) => {
+      for (let i = 1; i <= 5; i++) p.pushLine(round(i))
+      p.end(0)
+    },
+  ])
+  const result = await h.worker.runAgent(spec(), ctx()) // no maxTurns
+  assert.equal(result.text, "round 5")
+  assert.deepEqual(h.spawned[1]!.proc.kills, [])
+})
+
+test("stall watchdog: a working turn that goes silent trips a tiny stallTimeoutMs (retryable turn_stalled)", async () => {
+  const h = harness(
+    [
+      versionOk,
+      (p) => {
+        p.pushLine({ type: "agent_start" }) // one frame, then permanent silence
+      },
+    ],
+    { stallTimeoutMs: 20 },
+  )
+  await assert.rejects(h.worker.runAgent(spec(), ctx()), (err: unknown) => {
+    assert.ok(err instanceof AgentError)
+    assert.equal(err.code, "turn_stalled")
+    assert.equal(err.retryable, true) // a hung provider may well succeed on retry
+    return true
+  })
+  assert.deepEqual(h.spawned[1]!.proc.kills, ["SIGTERM"])
 })
 
 test("version preflight: isolated probe env, once per worker, outdated refused with upgrade hint", async () => {

@@ -150,8 +150,9 @@ export function runJsonlSubprocess(o: JsonlRunOpts): Promise<JsonlExit> {
       try {
         o.onValue(value)
       } catch (err) {
-        // A throwing onValue is a worker bug — fail the run loudly rather than crash the
-        // process from inside a stream handler.
+        // onValue throws either by worker bug or DELIBERATELY (a client-side turn cap throws an
+        // AgentError to abort a runaway mid-stream): both mean "stop now" — kill the child and fail
+        // the run with that error rather than crash the process from inside a stream handler.
         killWithGrace()
         settle(() => reject(err instanceof Error ? err : new Error(String(err))))
       }

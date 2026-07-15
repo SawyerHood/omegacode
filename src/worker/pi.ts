@@ -3,8 +3,11 @@
 //
 // Safety surface (full-access only): pi's tool allowlists are model/tool-layer controls, not OS
 // confinement (write/edit accept absolute paths; bash is unrestricted), so the ONLY accepted
-// sandbox is danger-full-access; read-only and workspace-write are rejected pre-spawn. There is no
-// native turn cap, so maxTurns is rejected. `effort` maps onto pi's --thinking levels, and
+// sandbox is danger-full-access; read-only and workspace-write are rejected pre-spawn. pi has no
+// native turn cap (the loop runs until no tool calls remain), so maxTurns is enforced CLIENT-SIDE:
+// each assistant `message_end` is one agent-loop round, and once the count exceeds maxTurns the
+// subprocess is killed with a non-retryable error_max_turns (a runaway pi agent once burned 33M
+// input tokens with nothing able to stop it). `effort` maps onto pi's --thinking levels, and
 // `instructions` maps onto --append-system-prompt — the runtime's corrective schema retry travels
 // through it.
 //
@@ -82,13 +85,6 @@ export class PiWorker implements Worker {
         throw new AgentError({ provider: PROVIDER, code: "invalid_schema", message: `output schema does not compile: ${(err as Error).message}` })
       }
     }
-    if (spec.maxTurns !== undefined) {
-      throw new AgentError({
-        provider: PROVIDER,
-        code: "unsupported_option",
-        message: "pi has no native turn cap (the agent loop runs until no tool calls remain); omit maxTurns or use the claude-code provider",
-      })
-    }
     if (spec.sandbox !== "danger-full-access") {
       throw new AgentError({
         provider: PROVIDER,
@@ -106,7 +102,9 @@ export class PiWorker implements Worker {
     await this.ensureVersion()
 
     const args = this.baseArgs(spec)
-    const working = await this.runTurn(spec, args, spec.prompt, ctx, true)
+    // The client-side turn cap guards the WORKING turn's agent loop (where the runaway lives); the
+    // extraction turn below is a single tool-less round that cannot loop, so it is left uncapped.
+    const working = await this.runTurn(spec, args, spec.prompt, ctx, true, spec.maxTurns)
     if (!spec.schema) return { text: working.text, status: "completed", usage: working.usage }
 
     // Extraction turn (two-phase structured output, codex precedent): silent, tool-less, no
@@ -123,7 +121,7 @@ export class PiWorker implements Worker {
       "off",
       ...(spec.instructions ? ["--append-system-prompt", spec.instructions] : []),
     ]
-    const extraction = await this.runTurn(spec, extractionArgs, extractionPrompt(spec, working.text), ctx, false)
+    const extraction = await this.runTurn(spec, extractionArgs, extractionPrompt(spec, working.text), ctx, false, undefined)
     let structured: unknown
     try {
       structured = parseJsonLoose(extraction.text)
@@ -207,12 +205,15 @@ export class PiWorker implements Worker {
     prompt: string,
     ctx: WorkerContext,
     forwardProgress: boolean,
+    maxTurns: number | undefined,
   ): Promise<TurnOutcome> {
     let deltaText = ""
     let finalText: string | undefined
     let usage = emptyUsage()
     let streamError: AgentError | undefined
     let sawAborted = false
+    // Client-side turn cap: each assistant message_end is one agent-loop round.
+    let turnCount = 0
     const forward = (e: WorkerProgress): void => {
       if (forwardProgress) ctx.onProgress(e)
     }
@@ -264,6 +265,8 @@ export class PiWorker implements Worker {
           case "message_end": {
             const message = isObject(value.message) ? value.message : undefined
             if (!message || message.role !== "assistant") return
+            // Each assistant message_end closes one agent-loop round — count them for the cap.
+            turnCount++
             // The LAST assistant message's text is the result; per-message usage sums across the
             // agent loop's API rounds (cache reads/writes fold into input, Claude precedent).
             const text = assistantText(message)
@@ -279,6 +282,21 @@ export class PiWorker implements Worker {
               forward({ kind: "usage", usage: { inputTokens: usage.inputTokens, outputTokens: usage.outputTokens } })
             }
             readAssistantTerminal(message)
+            // Client-side turn cap: pi has no native ceiling, so once the loop has produced more
+            // assistant rounds than maxTurns, throw — the shared transport kills the subprocess and
+            // rejects the run with this error, stopping a runaway before it can burn another round.
+            // error_max_turns is the codebase's established non-retryable turn-cap code (codex has
+            // no turn cap to mirror); retrying would only re-enter the same runaway. Usage rides the
+            // error so budget ceilings still see the tokens the killed loop billed.
+            if (maxTurns !== undefined && turnCount > maxTurns) {
+              throw new AgentError({
+                provider: PROVIDER,
+                code: "error_max_turns",
+                message: `pi exceeded its ${maxTurns}-turn cap (client-side) — the agent loop was killed to stop a runaway`,
+                retryable: false,
+                usage,
+              })
+            }
             return
           }
           case "tool_execution_start": {

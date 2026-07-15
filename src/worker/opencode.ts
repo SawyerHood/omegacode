@@ -4,8 +4,11 @@
 // Safety surface (full-access only): opencode has no OS-level sandbox and its app-level permission
 // rules leave bash unconfined, so the ONLY accepted sandbox is danger-full-access (passed through
 // as --dangerously-skip-permissions); read-only and workspace-write are rejected pre-spawn.
-// `effort` maps to opencode's provider-specific `--variant` flag. `instructions` IS supported (as a delimited prompt preamble —
-// `run` has no system-prompt flag): the runtime's corrective schema retry travels through it.
+// opencode's own `steps` config is only advisory, so maxTurns is enforced CLIENT-SIDE: each
+// `step_finish` is one agent-loop round, and once the count exceeds maxTurns the subprocess is
+// killed with a non-retryable error_max_turns. `effort` maps to opencode's provider-specific
+// `--variant` flag. `instructions` IS supported (as a delimited prompt preamble — `run` has no
+// system-prompt flag): the runtime's corrective schema retry travels through it.
 //
 // Verified against opencode 1.16.2 (anomalyco/opencode @ e9e2612); older binaries are refused.
 
@@ -65,13 +68,6 @@ export class OpencodeWorker implements Worker {
       }
     }
     // Fail closed on everything this backend cannot honestly enforce.
-    if (spec.maxTurns !== undefined) {
-      throw new AgentError({
-        provider: PROVIDER,
-        code: "unsupported_option",
-        message: "opencode has no enforceable turn cap (its `steps` config is advisory); omit maxTurns or use the claude-code provider",
-      })
-    }
     if (spec.sandbox !== "danger-full-access") {
       throw new AgentError({
         provider: PROVIDER,
@@ -102,20 +98,43 @@ export class OpencodeWorker implements Worker {
       "--dangerously-skip-permissions",
     ]
 
-    const working = await this.runTurn(spec, args, withInstructions(spec, spec.prompt), ctx, true)
+    // The client-side turn cap guards the WORKING turn's agent loop (where the runaway lives).
+    const working = await this.runTurn(spec, args, withInstructions(spec, spec.prompt), ctx, true, spec.maxTurns)
     if (!spec.schema) return { text: working.text, status: "completed", usage: working.usage }
 
     // Extraction turn (two-phase structured output, codex precedent): silent, reuses the working
     // turn's session so the model keeps its context. Instructions are forwarded so the runtime's
-    // corrective schema retry reaches the turn that actually emits JSON.
+    // corrective schema retry reaches the turn that actually emits JSON. Unlike pi's extraction
+    // (which passes --no-tools and so genuinely cannot loop), opencode has no tool-disable flag, so
+    // this turn keeps full tool access and CAN run away if the model ignores the "output only JSON"
+    // instruction — it therefore gets the SAME client-side maxTurns cap as the working turn.
     const extractionArgs = working.sessionID ? [...args, "--session", working.sessionID] : args
-    const extraction = await this.runTurn(
-      spec,
-      extractionArgs,
-      withInstructions(spec, extractionPrompt(spec, working)),
-      ctx,
-      false,
-    )
+    let extraction: TurnOutcome
+    try {
+      extraction = await this.runTurn(
+        spec,
+        extractionArgs,
+        withInstructions(spec, extractionPrompt(spec, working)),
+        ctx,
+        false,
+        spec.maxTurns,
+      )
+    } catch (err) {
+      // The working turn already billed real tokens before the extraction turn failed (e.g. the
+      // extraction loop trips the maxTurns cap). runAgent throws here, so the working turn's usage
+      // would otherwise vanish from budget/journal accounting — fold it into the error's usage so
+      // ceilings still see everything this run billed.
+      if (err instanceof AgentError) {
+        throw new AgentError({
+          provider: err.provider,
+          code: err.code,
+          message: err.message,
+          retryable: err.retryable,
+          usage: addUsage(working.usage, err.usage ?? emptyUsage()),
+        })
+      }
+      throw err
+    }
     let structured: unknown
     try {
       structured = parseJsonLoose(extraction.text)
@@ -178,11 +197,14 @@ export class OpencodeWorker implements Worker {
     prompt: string,
     ctx: WorkerContext,
     forwardProgress: boolean,
+    maxTurns: number | undefined,
   ): Promise<TurnOutcome> {
     let text = ""
     let usage = emptyUsage()
     let sessionID: string | undefined
     let streamError: AgentError | undefined
+    // Client-side turn cap: each step_finish closes one agent-loop round.
+    let turnCount = 0
     const forward = (e: WorkerProgress): void => {
       if (forwardProgress) ctx.onProgress(e)
     }
@@ -238,6 +260,8 @@ export class OpencodeWorker implements Worker {
             return
           }
           case "step_finish": {
+            // Each step_finish closes one agent-loop round — count them for the cap.
+            turnCount++
             const tokens = isObject(part?.tokens) ? part.tokens : isObject(value.tokens) ? value.tokens : undefined
             const cost = numOf(part?.cost) ?? numOf(value.cost) ?? 0
             if (tokens) {
@@ -249,6 +273,21 @@ export class OpencodeWorker implements Worker {
                 costUsd: usage.costUsd + cost,
               }
               forward({ kind: "usage", usage: { inputTokens: usage.inputTokens, outputTokens: usage.outputTokens } })
+            }
+            // Client-side turn cap: opencode's `steps` config is only advisory, so once the loop has
+            // produced more steps than maxTurns, throw — the shared transport kills the subprocess
+            // and rejects the run with this error, stopping a runaway before it can burn another
+            // step. error_max_turns is the codebase's established non-retryable turn-cap code (codex
+            // has no turn cap to mirror); retrying would only re-enter the same runaway. Usage rides
+            // the error so budget ceilings still see the tokens the killed loop billed.
+            if (maxTurns !== undefined && turnCount > maxTurns) {
+              throw new AgentError({
+                provider: PROVIDER,
+                code: "error_max_turns",
+                message: `opencode exceeded its ${maxTurns}-turn cap (client-side) — the agent loop was killed to stop a runaway`,
+                retryable: false,
+                usage,
+              })
             }
             return
           }

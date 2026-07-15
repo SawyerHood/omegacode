@@ -1,4 +1,4 @@
-import { test } from "node:test"
+import { after, test } from "node:test"
 import assert from "node:assert/strict"
 import { EventEmitter } from "node:events"
 
@@ -6,6 +6,12 @@ import { OpencodeWorker, OPENCODE_MIN_VERSION } from "../src/worker/opencode.js"
 import { AgentError, AgentInterrupted, type WorkerProgress } from "../src/worker/index.js"
 import type { SpawnProcess } from "../src/worker/subprocess-jsonl.js"
 import type { AgentSpec, Effort } from "../src/dsl/types.js"
+
+// The stall-watchdog test awaits a rejection driven by an unref'd timer while the only "process"
+// alive is a FakeProc with no real handles — keep the loop referenced (same rationale as
+// subprocess-jsonl.test.ts).
+const keepAlive = setInterval(() => {}, 60_000)
+after(() => clearInterval(keepAlive))
 
 // ---------------------------------------------------------------------------
 // Scripted spawn harness: each spawn pops the next script off a queue and
@@ -67,19 +73,19 @@ const versionOk: Script = (p) => {
   p.end(0)
 }
 
-function harness(scripts: Script[]): { worker: OpencodeWorker; spawned: SpawnCall[] } {
+function harness(scripts: Script[], opts: { stallTimeoutMs?: number } = {}): { worker: OpencodeWorker; spawned: SpawnCall[] } {
   const spawned: SpawnCall[] = []
   const queue = [...scripts]
-  const spawnProcess: SpawnProcess = (bin, args, opts) => {
+  const spawnProcess: SpawnProcess = (bin, args, o) => {
     const proc = new FakeProc()
-    const call: SpawnCall = { bin, args, cwd: opts.cwd, env: opts.env, proc }
+    const call: SpawnCall = { bin, args, cwd: o.cwd, env: o.env, proc }
     spawned.push(call)
     const script = queue.shift()
     assert.ok(script, `unexpected spawn #${spawned.length}: ${bin} ${args.join(" ")}`)
     queueMicrotask(() => script(proc, call))
     return proc as any
   }
-  return { worker: new OpencodeWorker({ spawnProcess }), spawned }
+  return { worker: new OpencodeWorker({ spawnProcess, ...opts }), spawned }
 }
 
 function ctx(signal?: AbortSignal): { signal: AbortSignal; onProgress: (e: WorkerProgress) => void; events: WorkerProgress[] } {
@@ -252,12 +258,11 @@ test("exit 0 with no assistant text is no_result; nonzero exit is provider_exit 
   })
 })
 
-test("fail-closed pre-spawn rejections: read-only (with remedy), workspace-write, maxTurns, approval", async () => {
+test("fail-closed pre-spawn rejections: read-only (with remedy), workspace-write, approval", async () => {
   const h = harness([]) // nothing may spawn
   for (const [over, pattern] of [
     [{ sandbox: "read-only" }, /set sandbox: "danger-full-access" to use provider "opencode"/],
     [{ sandbox: "workspace-write" }, /cannot enforce a "workspace-write" sandbox/],
-    [{ maxTurns: 5 }, /no enforceable turn cap/],
     [{ approval: "on-request" }, /cannot surface approval requests/],
   ] as Array<[Partial<AgentSpec>, RegExp]>) {
     await assert.rejects(h.worker.runAgent(spec(over), ctx()), (err: unknown) => {
@@ -282,6 +287,88 @@ test("effort maps to opencode --variant", async () => {
     assert.notEqual(variant, -1)
     assert.deepEqual(run.args.slice(variant, variant + 2), ["--variant", effort])
   }
+})
+
+// ---------------------------------------------------------------------------
+// Runaway-agent protection: client-side turn cap + no-output stall watchdog.
+
+// Each step_finish closes one agent-loop round (112 input / 25 output / 0.01 cost when folded).
+const step = (): Record<string, unknown> => ({
+  type: "step_finish",
+  sessionID: "s",
+  part: { cost: 0.01, tokens: { input: 100, output: 20, reasoning: 5, cache: { read: 10, write: 2 } } },
+})
+
+test("client-side turn cap: exceeding maxTurns kills the subprocess with non-retryable error_max_turns", async () => {
+  // maxTurns=2 with a loop that keeps stepping: the 3rd step_finish trips the cap.
+  const h = harness([
+    versionOk,
+    (p) => {
+      p.pushLine(step())
+      p.pushLine(step())
+      p.pushLine(step()) // one past the cap → killed here
+      p.pushLine(step()) // ignored: the run already settled
+      p.end(0)
+    },
+  ])
+  await assert.rejects(h.worker.runAgent(spec({ maxTurns: 2 }), ctx()), (err: unknown) => {
+    assert.ok(err instanceof AgentError)
+    assert.equal(err.code, "error_max_turns")
+    assert.equal(err.retryable, false) // a runaway must never be retried into another runaway
+    assert.match(err.message, /2-turn cap/)
+    // Failed turns still bill: usage rides the error so budget ceilings see the burned tokens.
+    assert.deepEqual(err.usage, { inputTokens: 336, outputTokens: 75, costUsd: 0.03 })
+    return true
+  })
+  assert.deepEqual(h.spawned[1]!.proc.kills, ["SIGTERM"])
+})
+
+test("turn cap is EXCEEDS, not reaches: a run that uses exactly maxTurns steps succeeds", async () => {
+  const h = harness([
+    versionOk,
+    (p) => {
+      p.pushLine({ type: "text", sessionID: "s", part: { text: "done" } })
+      p.pushLine(step())
+      p.pushLine(step())
+      p.end(0)
+    },
+  ])
+  const result = await h.worker.runAgent(spec({ maxTurns: 2 }), ctx())
+  assert.equal(result.text, "done")
+  assert.deepEqual(h.spawned[1]!.proc.kills, [])
+})
+
+test("maxTurns undefined keeps the loop uncapped: many steps complete normally", async () => {
+  const h = harness([
+    versionOk,
+    (p) => {
+      p.pushLine({ type: "text", sessionID: "s", part: { text: "done" } })
+      for (let i = 0; i < 5; i++) p.pushLine(step())
+      p.end(0)
+    },
+  ])
+  const result = await h.worker.runAgent(spec(), ctx()) // no maxTurns
+  assert.equal(result.text, "done")
+  assert.deepEqual(h.spawned[1]!.proc.kills, [])
+})
+
+test("stall watchdog: a working turn that goes silent trips a tiny stallTimeoutMs (retryable turn_stalled)", async () => {
+  const h = harness(
+    [
+      versionOk,
+      (p) => {
+        p.pushLine({ type: "step_start", sessionID: "s", part: {} }) // one frame, then permanent silence
+      },
+    ],
+    { stallTimeoutMs: 20 },
+  )
+  await assert.rejects(h.worker.runAgent(spec(), ctx()), (err: unknown) => {
+    assert.ok(err instanceof AgentError)
+    assert.equal(err.code, "turn_stalled")
+    assert.equal(err.retryable, true) // a hung provider may well succeed on retry
+    return true
+  })
+  assert.deepEqual(h.spawned[1]!.proc.kills, ["SIGTERM"])
 })
 
 test("version preflight: below-minimum binary is refused with provider_outdated", async () => {
@@ -338,6 +425,34 @@ test("schema: silent extraction turn reuses the working session; usage sums; str
   assert.deepEqual(result.usage, { inputTokens: 122, outputTokens: 30, costUsd: 0.012 })
   // The extraction turn is silent: no text/tool progress after the working turn's events.
   assert.equal(c.events.filter((e) => e.kind === "text").length, 1)
+})
+
+test("client-side turn cap also guards the extraction turn (opencode keeps tool access there)", async () => {
+  // opencode's extraction turn has no --no-tools flag, so it can loop; maxTurns must cap it too.
+  const h = harness([
+    versionOk,
+    happyRun, // working turn stays within the cap (1 step)
+    (p) => {
+      // Extraction ignores "output only JSON" and re-enters a tool loop: the 3rd step trips maxTurns=2.
+      p.pushLine(step())
+      p.pushLine(step())
+      p.pushLine(step()) // one past the cap → killed here
+      p.end(0)
+    },
+  ])
+  await assert.rejects(h.worker.runAgent(spec({ maxTurns: 2, schema: { type: "object" } }), ctx()), (err: unknown) => {
+    assert.ok(err instanceof AgentError)
+    assert.equal(err.code, "error_max_turns")
+    assert.equal(err.retryable, false)
+    assert.match(err.message, /2-turn cap/)
+    // The working turn already billed (happyRun 112/25/0.01) before extraction's 3 steps
+    // (336/75/0.03) tripped the cap — the error must carry BOTH so budget ceilings see the full
+    // spend, not just the extraction turn's tokens.
+    assert.deepEqual(err.usage, { inputTokens: 448, outputTokens: 100, costUsd: 0.04 })
+    return true
+  })
+  // The runaway extraction subprocess is killed, not left spinning.
+  assert.deepEqual(h.spawned[2]!.proc.kills, ["SIGTERM"])
 })
 
 test("schema extraction turn preserves effort variant", async () => {

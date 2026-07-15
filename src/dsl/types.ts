@@ -39,7 +39,8 @@ interface AgentOptsBase {
   worktree?: boolean | string
   /** Pin a stable resume cache key; otherwise the chained key is used. */
   key?: string
-  /** Hard cap on agent turns (provider-enforced where supported). */
+  /** Hard cap on agent turns — provider-enforced for claude-code, enforced client-side for pi and
+   *  opencode (the subprocess is killed once its agent loop exceeds the cap); codex rejects it. */
   maxTurns?: number
 }
 

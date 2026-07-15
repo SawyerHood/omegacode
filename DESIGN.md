@@ -23,7 +23,10 @@ interface.
 > spawn-per-call subprocess workers (`src/worker/opencode.ts`, `src/worker/pi.ts`, shared mechanics in
 > `src/worker/subprocess-jsonl.ts`). Both are **full-access-only**: neither CLI can enforce a confined
 > sandbox, so `read-only`/`workspace-write` are rejected pre-spawn and calls require an explicit
-> `sandbox: "danger-full-access"`. Both reject `maxTurns`; opencode maps `effort` onto `--variant`
+> `sandbox: "danger-full-access"`. Both enforce `maxTurns` **client-side** (neither CLI has a native
+> turn cap, so the shared transport counts agent-loop rounds — pi's assistant `message_end`s,
+> opencode's `step_finish`es — and kills the subprocess with a non-retryable `error_max_turns` once
+> the count exceeds the cap, stopping runaway loops). opencode maps `effort` onto `--variant`
 > while pi maps it onto `--thinking`. `instructions` maps to pi's `--append-system-prompt` and to a delimited prompt
 > preamble on opencode. Structured output uses a silent extraction turn plus the central validation
 > path. Bin overrides: `OPENCODE_BIN` / `PI_BIN`. Outdated binaries are refused (`provider_outdated`).
