@@ -231,7 +231,7 @@ and typechecking. Schemas are **JSON Schema** (the portable default that maps st
 | Primitive | Signature | Semantics |
 |---|---|---|
 | `agent` | `(prompt: string, opts?: AgentOpts) => Promise<string \| T>` | Run one agent turn (Codex or Claude Code, per `opts.provider`); resolve with its final text, or (with `schema`) a validated `T`. |
-| `parallel` | `(thunks: Array<() => Promise<T>>) => Promise<(T \| null)[]>` | Barrier; run thunks concurrently (under the cap), await all. A thunk that fails resolves to `null` in the results (filter with `.filter(Boolean)`); interrupts and cap/budget errors propagate and abort the fan-out. *(An earlier draft's `parallelSettled` was **not shipped**.)* |
+| `parallel` | `(thunks: Array<() => Promise<T>>) => Promise<(T \| null)[]>` | Barrier; run thunks concurrently (under the cap), await all. A thunk that fails resolves to `null` in the results (filter with `.filter(Boolean)`); a budget breach degrades the same way — that branch nulls and the fan-out completes with partial results (§8) — while interrupts and cap errors propagate and abort the fan-out. *(An earlier draft's `parallelSettled` was **not shipped**.)* |
 | `pipeline` | `(items, ...stages) => Promise<R[]>` | Each item streams through all stages independently (no barrier between stages); stage callbacks get `(prev, item, index)`. A failing item resolves to `null` and skips its remaining stages. |
 | `phase` | `(title: string) => void` | Open a named progress group; subsequent `agent()` calls render under it. |
 | `log` | `(msg: string) => void` | Emit a narrator line to the progress UI. |
@@ -446,9 +446,14 @@ clean-vs-dirty/preserve-on-changes semantics are identical.)
 - **Lifetime agent cap** (default 1000): a runaway-loop backstop; exceeding it throws.
 - **Fan-out cap** per `parallel`/`pipeline` call (default 4096): explicit error, not silent truncation.
 - **Budget** (output-token ceiling): set with `--budget N` and surfaced to the workflow as the injected
-  `budget = { total, spent(), remaining() }` global. The ceiling is hard — once `spent()` reaches `total`,
-  further `agent()` calls throw. With no `--budget` the ceiling is inert (`total` is `null`). *(This was
-  marked out-of-scope in an earlier draft; it shipped.)*
+  `budget = { total, spent(), remaining() }` global. The ceiling is hard — **no new agent starts** once
+  `spent()` reaches `total`. A breach throws `BudgetExceededError`, which `parallel`/`pipeline` degrade to
+  a `null` item (like an agent failure, *not* like the caps): siblings and already-admitted agents finish,
+  so the fan-out **completes with partial results** — one over-budget admission never aborts the whole
+  run. A bare top-level `await agent()` has no such catch, so a breach there rejects the run. With no
+  `--budget` the ceiling is inert (`total` is `null`). *(Earlier the breach was a control-flow error that
+  aborted the whole fan-out — which made `--budget` unusable in practice, so it graduated to per-branch
+  degradation.)*
 
 ---
 

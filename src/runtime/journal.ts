@@ -188,3 +188,22 @@ export function writeResult(runId: string, value: unknown): void {
   const dir = ensureRunDir(runId)
   writeFileSync(join(dir, "result.json"), JSON.stringify(value, null, 2), "utf8")
 }
+
+/** A non-completed run's machine-readable outcome (the shape writeFailureResult persists). */
+export interface FailureResult {
+  status: "failed" | "interrupted"
+  error?: string
+}
+
+/**
+ * Machine-readable outcome for a run that did NOT complete. Written to the same result.json the
+ * success path uses (which holds the bare return value), but with an explicit {status, error}
+ * envelope so tooling can distinguish a failed/interrupted run from a completed one without
+ * scraping events.jsonl — previously a failed run left no result.json at all, so callers were
+ * smuggling verdicts through thrown Error strings. The viewer folds status from events.jsonl and
+ * never reads this file, so the envelope shape cannot affect run rendering.
+ */
+export function writeFailureResult(runId: string, result: FailureResult): void {
+  const dir = ensureRunDir(runId)
+  writeFileSync(join(dir, "result.json"), JSON.stringify(result, null, 2), "utf8")
+}

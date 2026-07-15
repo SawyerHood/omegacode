@@ -34,10 +34,20 @@ export class WorkflowError extends Error {}
 
 /**
  * A single agent's failure (worker error wrap, persistent schema miss, worktree setup, …).
- * parallel()/pipeline() degrade it to a null item — unlike run-level WorkflowErrors
- * (budget/caps/duplicate keys), which abort the whole fan-out (see isControlFlow).
+ * parallel()/pipeline() degrade it to a null item — unlike the run-level WorkflowErrors
+ * (agent/fan-out caps, duplicate keys), which abort the whole fan-out (see isControlFlow).
  */
 export class AgentFailedError extends WorkflowError {}
+
+/**
+ * The --budget output-token ceiling was reached before this agent could start. Like an
+ * AgentFailedError (and unlike the other run-level WorkflowErrors), parallel()/pipeline() degrade
+ * it to a null item so siblings finish and the run completes with partial results — one over-budget
+ * admission must not destroy all fan-out work (see isControlFlow). A bare top-level `await agent()`
+ * has no such catch, so it still rejects the whole run. The ceiling is hard either way: no new
+ * agent starts once spent >= total.
+ */
+export class BudgetExceededError extends WorkflowError {}
 
 /** Valid values for the enum-typed spec fields, validated at spec resolution (H14). */
 export const SPEC_ENUMS = {
@@ -341,7 +351,12 @@ export class Runtime {
       // usage≈0, so without this they would overrun the ceiling on a fan-out.
       const budgetTotal = this.o.defaults.budget
       if (budgetTotal != null && this.totalUsage.outputTokens >= budgetTotal) {
-        throw new WorkflowError(`token budget exceeded (${this.totalUsage.outputTokens} / ${budgetTotal} output tokens)`)
+        // Ceiling is hard: no new agent starts once spent >= total. Emit a terminal "skipped" so a
+        // budget-nulled branch isn't left sitting "queued" in a run that then completes, then throw
+        // BudgetExceededError — degraded to null inside a fan-out (siblings continue), but rejecting
+        // a bare top-level await agent().
+        this.o.events.emit({ type: "agent", index, phaseIndex, phaseTitle, label, provider: spec.provider, model: spec.model, state: "skipped" })
+        throw new BudgetExceededError(`token budget exceeded — spent ${this.totalUsage.outputTokens} of ${budgetTotal} output tokens`)
       }
       const startedAt = Date.now()
       this.o.events.emit({ type: "agent", index, phaseIndex, phaseTitle, label, provider: spec.provider, model: spec.model, state: "running", startedAt })
@@ -548,12 +563,17 @@ export class Runtime {
 
 /**
  * Errors that must abort the whole fan-out rather than degrade to a null result: interruption
- * (Ctrl-C) and the runtime's own invariants (budget/agent caps, duplicate explicit keys). A single
- * agent's failure — AgentError from the worker, or its AgentFailedError wrap (e.g. a persistent
- * schema miss) — nulls only its own item, matching the baseline per-item semantics.
+ * (Ctrl-C) and the runtime's own structural invariants (agent/fan-out caps, duplicate explicit
+ * keys). A single agent's failure — AgentError from the worker, or its AgentFailedError wrap (e.g.
+ * a persistent schema miss) — nulls only its own item, matching the baseline per-item semantics; a
+ * BudgetExceededError is degraded the same way, so one over-budget admission doesn't abort every
+ * sibling (a bare top-level await agent() has no fan-out catch, so it still rejects the run).
  */
 function isControlFlow(err: unknown): boolean {
-  return err instanceof AgentInterrupted || (err instanceof WorkflowError && !(err instanceof AgentFailedError))
+  return (
+    err instanceof AgentInterrupted ||
+    (err instanceof WorkflowError && !(err instanceof AgentFailedError) && !(err instanceof BudgetExceededError))
+  )
 }
 
 function firstLine(s: string): string {

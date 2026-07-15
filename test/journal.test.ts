@@ -12,6 +12,7 @@ import {
   listRunIds,
   ResumePreconditionError,
   runDir,
+  writeFailureResult,
   writeResult,
   type JournalMeta,
 } from "../src/runtime/journal.ts"
@@ -173,6 +174,16 @@ test("writeResult writes result.json", () => {
     const p = join(home, "runs", "rr", "result.json")
     const txt = readFileSync(p, "utf8")
     assert.deepEqual(JSON.parse(txt), { ok: true })
+  })
+})
+
+test("writeFailureResult writes a {status, error} envelope to result.json", () => {
+  // A failed/interrupted run has no bare return value; the envelope lets tooling read a
+  // machine-readable verdict from the SAME file the success path uses (distinguishable by shape).
+  withHome((home) => {
+    writeFailureResult("ff", { status: "failed", error: "token budget exceeded — spent 26 of 1 output tokens" })
+    const txt = readFileSync(join(home, "runs", "ff", "result.json"), "utf8")
+    assert.deepEqual(JSON.parse(txt), { status: "failed", error: "token budget exceeded — spent 26 of 1 output tokens" })
   })
 })
 

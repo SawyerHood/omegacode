@@ -16,6 +16,7 @@ import {
   listRunIds,
   type LoadedJournal,
   runDir,
+  writeFailureResult,
   writeResult,
 } from "./journal.js"
 import { checkProviderModelPair, checkSpecEnum, Runtime } from "./primitives.js"
@@ -167,6 +168,10 @@ export async function runWorkflow(opts: RunOptions): Promise<RunOutcome> {
   } catch (err) {
     status = ac.signal.aborted ? "interrupted" : "failed"
     error = err instanceof Error ? err.message : String(err)
+    // Persist the outcome even on failure/interruption (the success path wrote the bare result
+    // above). The {status, error} envelope lets tooling read a machine-readable verdict instead of
+    // scraping the thrown message out of events.jsonl.
+    writeFailureResult(runId, { status, error })
   } finally {
     await runtime.settle()
     clearInterval(heartbeat)

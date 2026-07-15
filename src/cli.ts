@@ -328,9 +328,16 @@ async function cmdRuns(flags: Flags): Promise<void> {
     const loaded = Journal.load(id)
     const name = loaded.meta?.workflowFile?.split("/").pop() ?? ""
     const agents = loaded.results.size
-    const resultPath = join(dir, id, "result.json")
-    const done = existsSync(resultPath)
-    const status = done ? "completed" : isStaleRun(dir, id) ? "stale" : "?"
+    // Derive status from the last `run` event, the authoritative terminal marker (the viewer folds
+    // the same source). result.json now exists for failed/interrupted runs too, so its mere
+    // presence no longer means "completed".
+    const last = lastRunStatus(dir, id)
+    const status =
+      last === "completed" || last === "failed" || last === "interrupted"
+        ? last
+        : isStaleRun(dir, id)
+          ? "stale"
+          : "?"
     return { id, name, agents, status, at: loaded.meta?.createdAt ?? 0 }
   })
   rows.sort((a, b) => b.at - a.at)
@@ -342,28 +349,32 @@ async function cmdRuns(flags: Flags): Promise<void> {
  * (SIGKILL / crash / closed terminal) without writing a terminal event. The deadman switch.
  */
 function isStaleRun(runsBase: string, id: string): boolean {
-  const rd = join(runsBase, id)
-  let lastRunStatus: string | undefined
-  try {
-    const lines = readFileSync(join(rd, "events.jsonl"), "utf8").trim().split("\n")
-    for (let i = lines.length - 1; i >= 0; i--) {
-      const m = lines[i]!.match(/"type":"run","status":"([a-z]+)"/)
-      if (m) {
-        lastRunStatus = m[1]
-        break
-      }
-    }
-  } catch {
-    return false
-  }
-  if (lastRunStatus !== "started") return false
+  if (lastRunStatus(runsBase, id) !== "started") return false
   let beat = 0
   try {
-    beat = statSync(join(rd, ".heartbeat")).mtimeMs
+    beat = statSync(join(runsBase, id, ".heartbeat")).mtimeMs
   } catch {
     // no heartbeat file
   }
   return Date.now() - beat > 20_000
+}
+
+/**
+ * The status of a run's most recent `run` event in events.jsonl ("started"/"completed"/"failed"/
+ * "interrupted"), or undefined if the file is missing/unreadable or holds no run event. The
+ * authoritative terminal marker — the viewer folds this same source (§10.2).
+ */
+function lastRunStatus(runsBase: string, id: string): string | undefined {
+  try {
+    const lines = readFileSync(join(runsBase, id, "events.jsonl"), "utf8").trim().split("\n")
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const m = lines[i]!.match(/"type":"run","status":"([a-z]+)"/)
+      if (m) return m[1]
+    }
+  } catch {
+    // no events file / unreadable
+  }
+  return undefined
 }
 
 function dirSize(dir: string): number {

@@ -4,7 +4,7 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSy
 import { execFileSync } from "node:child_process"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { Runtime } from "../src/runtime/primitives.ts"
+import { BudgetExceededError, Runtime } from "../src/runtime/primitives.ts"
 import { ensureRunDir, Journal, type LoadedJournal } from "../src/runtime/journal.ts"
 import { FileEventSink } from "../src/runtime/event-sink.ts"
 import { runInSandbox } from "../src/runtime/sandbox.ts"
@@ -322,31 +322,80 @@ test("H6: parallel() RETHROWS AgentInterrupted instead of nulling it", async () 
   }
 })
 
-test("H6: parallel() RETHROWS WorkflowError (budget/cap) instead of nulling it", async () => {
-  // concurrency 1 so the second thunk is queued while the first spends the whole budget; when it
-  // gets the slot the in-slot budget check throws a WorkflowError that must propagate (not null).
-  const b = build({
-    defaults: { budget: 1, concurrency: 1 },
-    hooks: { run: async (s) => ({ text: s.prompt, status: "completed", usage: { ...emptyUsage(), outputTokens: 100 } }) },
-  })
+test("H6: parallel() RETHROWS a control-flow WorkflowError (duplicate key) instead of nulling it", async () => {
+  // A non-budget, non-AgentFailed WorkflowError (here a duplicate explicit key) is a structural
+  // invariant, not a per-agent failure: it must abort the whole fan-out, never degrade to null —
+  // otherwise a doomed body keeps running and results are silently poisoned (isControlFlow).
+  const b = build()
   try {
     await assert.rejects(
-      runBody(b, `return await parallel([() => agent("a"), () => agent("b")])`),
-      (e: unknown) => e instanceof Error && (e as Error).message.includes("budget"),
+      runBody(b, `return await parallel([() => agent("a", { key: "K" }), () => agent("b", { key: "K" })])`),
+      /duplicate explicit agent key/,
     )
   } finally {
     b.cleanup()
   }
 })
 
-test("M11: budget is re-checked inside the semaphore slot", async () => {
-  // concurrency 1 so the second agent is queued while the first spends the whole budget.
+test("budget breach NULLS the over-budget branch and lets siblings complete (partial results)", async () => {
+  // concurrency 1 so admissions are FIFO: the first agents spend the whole budget, then each queued
+  // sibling re-checks the ceiling at admission, breaches, and nulls — the fan-out COMPLETES with
+  // partial results instead of aborting. (Previously a budget WorkflowError propagated as
+  // control-flow and killed every sibling — --budget was unusable, so it graduated to a per-branch
+  // null like an agent failure; only a bare top-level await agent() still rejects the run.)
+  const b = build({
+    defaults: { budget: 10, concurrency: 1 },
+    hooks: { run: async (s) => ({ text: s.prompt, status: "completed", usage: { ...emptyUsage(), outputTokens: 5 } }) },
+  })
+  try {
+    const out = (await runBody(
+      b,
+      `return await parallel([() => agent("a"), () => agent("b"), () => agent("c"), () => agent("d")])`,
+    )) as unknown[]
+    // budget 10, 5 output tokens each: a admits at spent 0, b at spent 5; c and d admit at spent
+    // 10 >= 10 → BudgetExceededError → null. Siblings survive, the call resolves (never rejects).
+    assert.deepEqual(out, ["a", "b", null, null])
+    // The ceiling is HARD: no agent past the two the budget covered ever reached the worker.
+    assert.equal(b.worker.calls.length, 2, "an agent was admitted past the budget ceiling")
+    // Each budget-nulled branch emits a terminal "skipped" so it isn't left sitting "queued".
+    const skipped = b.sink.events.filter((e) => e.type === "agent" && e.state === "skipped")
+    assert.equal(skipped.length, 2)
+  } finally {
+    b.cleanup()
+  }
+})
+
+test("budget breach NULLS an over-budget pipeline item but keeps siblings (mirror of parallel)", async () => {
+  // pipeline()'s catch runs the SAME isControlFlow, so a budget breach degrades the item to null
+  // exactly like parallel(). concurrency 1 makes admission FIFO: item "a" spends the budget, so
+  // item "b" breaches at admission and nulls — "a" still completes.
+  const b = build({
+    defaults: { budget: 5, concurrency: 1 },
+    hooks: { run: async (s) => ({ text: s.prompt, status: "completed", usage: { ...emptyUsage(), outputTokens: 5 } }) },
+  })
+  try {
+    const out = (await runBody(b, `return await pipeline(["a", "b"], async (p) => await agent(p))`)) as unknown[]
+    // budget 5, 5 tokens each: "a" admits at spent 0 (→5); "b" admits at spent 5 >= 5 → null.
+    assert.deepEqual(out, ["a", null])
+    assert.equal(b.worker.calls.length, 1, "an item was admitted past the budget ceiling")
+  } finally {
+    b.cleanup()
+  }
+})
+
+test("M11: budget is re-checked inside the semaphore slot; a bare top-level breach rejects the run", async () => {
+  // concurrency 1 so the second agent is queued while the first spends the whole budget. Unlike a
+  // fan-out (where a breach nulls the branch), a bare top-level await agent() has no catch, so the
+  // BudgetExceededError propagates and rejects the whole run.
   const b = build({
     defaults: { budget: 50, concurrency: 1 },
     hooks: { run: async (s) => ({ text: s.prompt, status: "completed", usage: { ...emptyUsage(), outputTokens: 60 } }) },
   })
   try {
-    await assert.rejects(runBody(b, `await agent("a"); return await agent("b")`), /budget/)
+    await assert.rejects(
+      runBody(b, `await agent("a"); return await agent("b")`),
+      (e: unknown) => e instanceof BudgetExceededError && /budget/.test((e as Error).message),
+    )
     // the first agent ran, the second was rejected by the in-slot check (worker never saw it)
     assert.equal(b.worker.calls.length, 1)
   } finally {
