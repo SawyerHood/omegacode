@@ -6,6 +6,8 @@ import { homedir } from "node:os"
 import { dirname, join, resolve, sep } from "node:path"
 import { fileURLToPath } from "node:url"
 import { runWorkflow, type RunOverrides } from "./runtime/run.js"
+import { findGitRoot } from "./runtime/worktree.js"
+import { listWorktrees, pruneWorktrees } from "./runtime/worktree-gc.js"
 import { parseWorkflow, WorkflowSyntaxError } from "./runtime/sandbox.js"
 import { listWorkflows, resolveWorkflowName, WorkflowNotFoundError } from "./runtime/registry.js"
 import { dataRoot, Journal, JournalNotFoundError, ResumePreconditionError } from "./runtime/journal.js"
@@ -166,6 +168,8 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
       return cmdRuns(flags)
     case "workflows":
       return cmdWorkflows(flags)
+    case "worktrees":
+      return cmdWorktrees(flags)
     case "save":
       return cmdSave(flags)
     case "validate":
@@ -512,6 +516,72 @@ async function cmdWorkflows(flags: Flags): Promise<void> {
   }
 }
 
+async function cmdWorktrees(flags: Flags): Promise<void> {
+  // Resolve the repo: --repo <path> or the cwd's git root. findGitRoot returns git's canonical
+  // toplevel, which listWorktrees needs to match against registered worktree paths.
+  const repoArg = str(flags.repo)
+  const gitRoot = await findGitRoot(repoArg ? resolve(repoArg) : process.cwd())
+  if (!gitRoot) throw new UsageError(repoArg ? `--repo is not inside a git repository: ${repoArg}` : "not inside a git repository (pass --repo <path>)")
+
+  const force = flags.force === true
+
+  if (flags.prune === true) {
+    const res = await pruneWorktrees(gitRoot, { force })
+    if (flags.json === true) {
+      process.stdout.write(JSON.stringify(res, null, 2) + "\n")
+      return
+    }
+    let removed = 0
+    for (const w of res.worktrees) {
+      if (w.removed) {
+        removed++
+        const branchNote = w.branchDeleted ? `branch ${w.branch} deleted` : (w.branchPreserved ?? `branch ${w.branch} kept`)
+        console.log(`removed  ${w.path}  (${humanSize(w.freedBytes)}; ${branchNote})`)
+      } else {
+        console.log(`skipped  ${w.path}  (${w.skipped})`)
+      }
+    }
+    for (const b of res.orphanBranches) {
+      if (b.deleted) console.log(`deleted  branch ${b.branch}`)
+      else console.log(`kept     branch ${b.branch}  (${b.skipped})`)
+    }
+    console.log(`pruned ${removed} worktree(s), ${res.orphanBranches.filter((b) => b.deleted).length} orphan branch(es); freed ${humanSize(res.freedBytes)}`)
+    return
+  }
+
+  const listing = await listWorktrees(gitRoot)
+  if (flags.json === true) {
+    process.stdout.write(JSON.stringify(listing, null, 2) + "\n")
+    return
+  }
+  if (listing.worktrees.length === 0 && listing.orphanBranches.length === 0) {
+    console.log("(no leaked worktrees)")
+    return
+  }
+  for (const w of listing.worktrees) {
+    const state = w.dirty ? "dirty" : "clean"
+    const ahead = w.ahead === null ? "?" : String(w.ahead)
+    const activeNote = w.active ? "  (active run)" : ""
+    console.log(`${state.padEnd(5)}  +${ahead.padStart(3)}  ${humanSize(w.sizeBytes).padStart(8)}  ${w.branch.padEnd(24)}  ${w.path}${activeNote}`)
+  }
+  for (const b of listing.orphanBranches) {
+    console.log(`orphan ${b.merged ? "merged  " : "unmerged"}  ${b.branch}`)
+  }
+  // The "+N" (commits ahead of base) column reads omegacode.base, which git stores in the SHARED
+  // config, so it aliases across live worktrees — flag it as best-effort rather than print a bare
+  // number the user might trust. Deletion never gates on this (it gates on merged-into-HEAD).
+  if (listing.worktrees.some((w) => (w.ahead ?? 0) > 0)) {
+    console.log(`note: "+N" (commits ahead of base) is best-effort — the base is stored in shared git config and can alias across worktrees.`)
+  }
+}
+
+/** Compact human byte size (matches `runs --prune`'s MB style but scales past GB). */
+function humanSize(bytes: number): string {
+  if (bytes < 1e6) return `${(bytes / 1e3).toFixed(0)} KB`
+  if (bytes < 1e9) return `${(bytes / 1e6).toFixed(1)} MB`
+  return `${(bytes / 1e9).toFixed(2)} GB`
+}
+
 async function cmdSave(flags: Flags): Promise<void> {
   const file = (flags._ as string[])[1]
   if (!file) {
@@ -658,6 +728,7 @@ Usage:
 
   omegacode serve [--port 4123] [--host h] [--idle-shutdown]   Live read-only web viewer of all runs
   omegacode runs [--prune --keep <N>] [--prune-stale]   List runs (--prune old, --prune-stale dead)
+  omegacode worktrees [--repo <p>] [--prune] [--force] [--json]   List/prune leaked agent worktrees + aw/* branches
   omegacode workflows [--json]                  List saved/named workflows (project, user, builtin)
   omegacode save <file.workflow.js> [--project] [--force]   Save a workflow under its meta.name
   omegacode validate <file.workflow.js | name>  Parse + check meta without running

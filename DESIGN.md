@@ -425,6 +425,21 @@ workflow-worktree behavior exactly**:
   Claude Code does.
 - **Requires** the `cwd` to be a git repo; otherwise `worktree: true` throws with an actionable message
   (no silent fallback to the shared dir).
+- **GC (`omegacode worktrees`, `runtime/worktree-gc.ts`).** Preserved (changed) worktrees and crash
+  orphans accumulate — teardown never force-deletes them, and a killed run never reaches teardown. The
+  command lists everything under `.omegacode/worktrees/` (clean/dirty, commits ahead of the recorded
+  base, disk size) plus orphaned `aw/*` branches; `--prune` removes clean worktrees and deletes orphan
+  branches **provably free of unique work** (merged into HEAD). Dirty worktrees and unmerged branches are
+  skipped unless `--force`; even `--force` removes a dirty worktree's *directory* but **preserves its
+  branch ref** when unmerged (it never deletes committed work). Deletes use `git branch -d` so git's own
+  merged check backstops ours. A worktree whose owning run is **live** (a fresh `.heartbeat` under
+  `dataRoot()/runs/<runId>/`, the same deadman signal `runs` uses) is never pruned — not even with
+  `--force` — so a concurrent in-flight run can't have its worktree/branch reclaimed out from under it
+  (lock status can't discriminate: crash orphans are locked too). A **detached** worktree carrying
+  unmerged commits has no branch ref to preserve them, so it is skipped unconditionally rather than
+  orphaning the work. It reads `BASE_CONFIG_KEY` for the ahead-of-base column but gates deletion
+  on merged-into-HEAD, not the base — the base config is written to the *shared* config and aliases
+  across live worktrees, so it is best-effort for display only (the list output flags it as such).
 
 `worktree: "my-branch"` (string form) pins the branch name. The runtime's `worktree` helper shells out
 to `git worktree add/remove/lock/unlock` + `git status` / `git rev-list`. **Worktree isolation is
@@ -621,6 +636,7 @@ omegacode run <file.workflow.js | name> [--args <json> | --args-file f.json]
                                  [--fake] [--json] [--open] [--no-serve] [--port N]
 omegacode serve [--port 4123] [--host h] [--idle-shutdown]   # read-only viewer over all runs
 omegacode runs [--prune --keep N] [--prune-stale]            # list runs (or prune old / dead ones)
+omegacode worktrees [--repo p] [--prune] [--force] [--json]  # list/prune leaked worktrees + aw/* branches
 omegacode workflows [--json]            # list saved/named workflows (project, user, builtin tiers)
 omegacode save <file> [--project] [--force]   # save a workflow into the user (or project) registry
 omegacode validate <file.workflow.js | name>  # parse the file + print its meta (no plan / no run)
@@ -695,6 +711,7 @@ omegacode/
       jsonl-writer.ts     # shared append-only JSONL write-stream wrapper (transcript + event sink)
       progress.ts         # phase/agent progress model + terminal renderer (cached vs live agents)
       worktree.ts         # git worktree helper (create/lock/clean-vs-dirty teardown)
+      worktree-gc.ts      # list/prune leaked worktrees + orphan aw/* branches (omegacode worktrees)
     server/
       serve.ts            # viewer HTTP server: /api/runs, SSE stream (fs.watch tail of events.jsonl)
       tail.ts             # jsonl tail/offset helpers for the server (dependency-free, testable)

@@ -16,7 +16,10 @@ import { promisify } from "node:util"
 
 const exec = promisify(execFile)
 
-const BASE_CONFIG_KEY = "omegacode.base"
+/** Config key holding a worktree's creation base commit. Exported so the GC command (worktree-gc.ts)
+ * reads the same key. NB: git writes this to the SHARED config (not per-worktree), so with multiple
+ * live worktrees the last creation wins — the GC "ahead of base" column is best-effort for that reason. */
+export const BASE_CONFIG_KEY = "omegacode.base"
 
 export interface Worktree {
   path: string
@@ -25,7 +28,9 @@ export interface Worktree {
   base?: string
 }
 
-async function git(cwd: string, args: string[]): Promise<string> {
+/** Run git in `cwd`, returning trimmed stdout; throws on non-zero exit. The single git-plumbing entry
+ * point shared by this module and the worktree GC command (worktree-gc.ts). */
+export async function git(cwd: string, args: string[]): Promise<string> {
   const { stdout } = await exec("git", args, { cwd, maxBuffer: 64 * 1024 * 1024 })
   return stdout.trim()
 }

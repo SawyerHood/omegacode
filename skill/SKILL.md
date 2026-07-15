@@ -209,6 +209,7 @@ omegacode run <file.workflow.js | name> [--args '<json>' | --args-file <f>]
                                        [--concurrency N] [--budget N] [--resume <runId>] [--fake] [--json] [--open]
 omegacode serve [--port 4123] [--host h]      Live read-only web viewer of all runs
 omegacode runs [--prune --keep <N>]           List runs (or prune old ones)
+omegacode worktrees [--repo p] [--prune] [--force] [--json]   List/prune leaked agent worktrees + aw/* branches
 omegacode workflows [--json]                  List saved/named workflows (project, user, builtin)
 omegacode save <file.workflow.js> [--project] [--force]   Save a workflow under its meta.name
 omegacode validate <file.workflow.js | name>  Parse + check meta without running
@@ -217,6 +218,8 @@ omegacode install-skill [--claude] [--agents] Install this skill into agent skil
 ```
 
 `--fake` runs with a fake worker (no real agents) for a fast smoke test; `--json` prints `{runId, status, url, result, error}` (and still starts the viewer). The viewer (`serve` / `run --open`, and auto-started by `run`) reads `~/.omegacode/runs` and shows a run list, a live phase/agent tree, and a per-agent chat-feed drilldown; it streams via SSE and never executes anything.
+
+`worktree: true` agents that crash or preserve their work leave a worktree under `<repo>/.omegacode/worktrees/` and an `aw/<runId>-<index>` branch behind — these never auto-clean. `omegacode worktrees` lists them (clean/dirty, commits ahead of base, disk size) plus orphaned `aw/*` branches; `--prune` removes clean worktrees and deletes orphan branches fully merged into HEAD. Dirty worktrees and unmerged branches are skipped unless `--force`, and even `--force` never deletes an unmerged branch (it preserves the ref). `--repo <p>` targets a repo other than the cwd; `--json` emits the machine-readable listing/result.
 
 ## Saved / named workflows
 
