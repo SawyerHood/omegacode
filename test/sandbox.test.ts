@@ -113,9 +113,139 @@ test("a non-array meta.phases fails at parse time, not as a TypeError mid-run", 
   assert.throws(() => parseWorkflow(bad), /meta\.phases must be an array/)
   assert.throws(() => parseWorkflow(`export const meta = { name: "n", description: "d", phases: "Plan" }\n`), WorkflowSyntaxError)
   // A well-formed array (even with unusable entries — the runtime skips those) still parses.
-  // meta crosses the vm boundary, so compare structurally via JSON (not prototype-strict deepEqual).
+  // The strict parser builds null-prototype objects, so compare structurally via JSON rather than
+  // prototype-strict deepEqual.
   const ok = `export const meta = { name: "n", description: "d", phases: [{ title: "Plan" }, {}] }\nreturn 1\n`
   assert.equal(JSON.stringify(parseWorkflow(ok).meta.phases), JSON.stringify([{ title: "Plan" }, {}]))
+})
+
+// The meta literal is parsed by a strict validate-then-build parser, NOT executed. These cover the
+// full accepted grammar and reject every expression form the old vm-eval used to run.
+// A rejected meta must throw WorkflowSyntaxError whose message names the offending construct.
+function rejectsMeta(literal: string, re: RegExp): void {
+  const src = `export const meta = ${literal}\nreturn 1\n`
+  assert.throws(
+    () => parseWorkflow(src),
+    (e: unknown) => e instanceof WorkflowSyntaxError && re.test((e as Error).message),
+    `expected a WorkflowSyntaxError matching ${re} for meta = ${literal}`,
+  )
+}
+
+test("strict meta parser accepts every scalar type, nested objects/arrays, comments, trailing commas", () => {
+  // One literal exercising the whole accepted grammar: identifier + string keys, string/number/
+  // negative-number/boolean/null scalars, a nested object, an array of mixed accepted values, a
+  // no-interpolation backtick string, a line comment, a block comment, and trailing commas.
+  const src = [
+    `export const meta = {`,
+    `  name: "n", // a line comment`,
+    `  description: "d",`,
+    `  /* a block comment */`,
+    `  "quoted-key": "v",`,
+    `  count: -3,`,
+    `  ratio: 1.5e-2,`,
+    `  flagT: true,`,
+    `  flagF: false,`,
+    `  nothing: null,`,
+    "  back: `plain backtick, no interpolation`,",
+    `  nested: { a: 1, b: [ "x", 2, false, { c: null }, ], },`,
+    `  list: [{ title: "Plan" }, {}],`,
+    `}`,
+    `return 1`,
+    ``,
+  ].join("\n")
+  const { meta } = parseWorkflow(src)
+  const m = meta as Record<string, unknown>
+  assert.equal(m.name, "n")
+  assert.equal(m["quoted-key"], "v")
+  assert.equal(m.count, -3)
+  assert.equal(m.ratio, 0.015)
+  assert.equal(m.flagT, true)
+  assert.equal(m.flagF, false)
+  assert.equal(m.nothing, null)
+  assert.equal(m.back, "plain backtick, no interpolation")
+  // Compare nested structure by JSON (parser builds null-proto objects, so deepEqual would differ).
+  assert.equal(JSON.stringify(m.nested), JSON.stringify({ a: 1, b: ["x", 2, false, { c: null }] }))
+  assert.equal(JSON.stringify(m.list), JSON.stringify([{ title: "Plan" }, {}]))
+})
+
+test("strict meta parser decodes standard string escapes without executing", () => {
+  const src = `export const meta = { name: "a\\tb", description: "line1\\nline2\\u0041" }\nreturn 1\n`
+  const { meta } = parseWorkflow(src)
+  assert.equal(meta.name, "a\tb")
+  assert.equal(meta.description, "line1\nline2A")
+})
+
+test("strict meta parser rejects a method call in a value (the old vm-eval EXECUTED this)", () => {
+  // `"x".repeat(1e9)` used to run under only a 1s timeout — a memory-blowup DoS. Now it's rejected
+  // structurally: the string parses, then the trailing `.repeat(...)` is not a pure literal.
+  rejectsMeta(`{ name: "x".repeat(1000000000), description: "d" }`, /method calls and property access are not allowed.*pure literal/s)
+})
+
+test("strict meta parser rejects a getter (would have run arbitrary code on access)", () => {
+  rejectsMeta(`{ name: "n", get description() { return "d" } }`, /getters\/setters are not allowed.*pure literal/s)
+})
+
+test("strict meta parser rejects a setter", () => {
+  rejectsMeta(`{ name: "n", set description(v) {} }`, /getters\/setters are not allowed.*pure literal/s)
+})
+
+test("strict meta parser rejects a method shorthand", () => {
+  rejectsMeta(`{ name: "n", description() { return "d" } }`, /method definitions are not allowed.*pure literal/s)
+})
+
+test("strict meta parser rejects __proto__ and does NOT pollute Object.prototype", () => {
+  // The old throwaway-context evaluator could pollute via `__proto__`; the strict parser both
+  // rejects the key AND builds null-prototype objects so nothing reaches Object.prototype.
+  rejectsMeta(`{ name: "n", description: "d", __proto__: { polluted: true } }`, /reserved key "__proto__" is not allowed.*pure literal/s)
+  // A value nested under __proto__ must never leak onto the global prototype.
+  rejectsMeta(`{ name: "n", __proto__: { polluted: true }, description: "d" }`, /__proto__/)
+  assert.equal(({} as Record<string, unknown>).polluted, undefined)
+})
+
+test("strict meta parser rejects constructor and prototype keys", () => {
+  rejectsMeta(`{ name: "n", description: "d", constructor: 1 }`, /reserved key "constructor" is not allowed/)
+  rejectsMeta(`{ name: "n", description: "d", prototype: 1 }`, /reserved key "prototype" is not allowed/)
+})
+
+test("strict meta parser rejects computed keys", () => {
+  rejectsMeta(`{ ["na" + "me"]: "n", description: "d" }`, /computed keys are not allowed.*pure literal/s)
+})
+
+test("strict meta parser rejects object and array spreads", () => {
+  rejectsMeta(`{ ...base, name: "n", description: "d" }`, /spread syntax is not allowed.*pure literal/s)
+  rejectsMeta(`{ name: "n", description: "d", phases: [...other] }`, /spread syntax is not allowed.*pure literal/s)
+})
+
+test("strict meta parser rejects function and arrow values", () => {
+  rejectsMeta(`{ name: "n", description: function () { return "d" } }`, /function values are not allowed.*pure literal/s)
+  rejectsMeta(`{ name: "n", description: () => "d" }`, /arrow functions.*not allowed.*pure literal/s)
+})
+
+test("strict meta parser rejects template interpolation, accepts plain backticks", () => {
+  rejectsMeta("{ name: `hi ${1 + 1}`, description: \"d\" }", /template interpolation.*not allowed.*pure literal/s)
+  // A backtick with NO interpolation is a plain string and is accepted.
+  const ok = parseWorkflow("export const meta = { name: `plain`, description: \"d\" }\nreturn 1\n")
+  assert.equal(ok.meta.name, "plain")
+})
+
+test("strict meta parser rejects bare identifier values (references/expressions)", () => {
+  rejectsMeta(`{ name: someVar, description: "d" }`, /bare identifier `someVar` is not allowed.*pure literal/s)
+  rejectsMeta(`{ name: "n", description: undefined }`, /`undefined` is not a literal.*pure literal/s)
+})
+
+test("strict meta parser rejects shorthand properties", () => {
+  rejectsMeta(`{ name, description: "d" }`, /shorthand properties are not allowed.*pure literal/s)
+})
+
+test("strict meta parser rejects template-literal keys", () => {
+  rejectsMeta("{ `name`: \"n\", description: \"d\" }", /template-literal keys are not allowed.*pure literal/s)
+})
+
+test("strict meta parser rejects deeply nested literals instead of stack-overflowing", () => {
+  // Untrusted input has no execution timeout anymore, so nesting is depth-bounded to keep a
+  // pathological `[[[[…]]]]` from overflowing the recursive-descent stack.
+  const deep = "[".repeat(200) + "]".repeat(200)
+  rejectsMeta(`{ name: "n", description: "d", phases: ${deep} }`, /nested too deeply/)
 })
 
 test("runInSandbox runs the body and resolves its return value", async () => {

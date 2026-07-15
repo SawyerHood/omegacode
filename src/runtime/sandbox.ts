@@ -33,14 +33,12 @@ export function parseWorkflow(source: string): ParsedWorkflow {
   const braceEnd = matchBrace(source, braceStart)
   const metaSrc = source.slice(braceStart, braceEnd + 1)
 
-  let metaValue: unknown
-  try {
-    // Evaluate the literal in a throwaway, codegen-disabled context. Pure literals only.
-    const ctx = createContext(Object.create(null), { codeGeneration: { strings: false, wasm: false } })
-    metaValue = new Script("(" + metaSrc + ")").runInContext(ctx, { timeout: 1000 })
-  } catch (err) {
-    throw new WorkflowSyntaxError(`meta is not a valid literal: ${(err as Error).message}`)
-  }
+  // Parse the literal strictly WITHOUT executing anything. The prior implementation vm-evaluated
+  // `("+metaSrc+")"`, which ran arbitrary expressions smuggled into the "literal" — method calls
+  // (`{name: "x".repeat(1e9)}`), getters, `__proto__` writes, computed keys, template interpolation
+  // — with only a 1s timeout as a backstop. parseMetaLiteral accepts a closed pure-literal grammar
+  // and rejects every expression form by name, so untrusted meta can never execute code.
+  const metaValue = parseMetaLiteral(metaSrc)
   validateMeta(metaValue)
 
   // Consume an optional trailing semicolon right after the meta literal.
@@ -146,6 +144,325 @@ function skipString(src: string, i: number, quote: string): number {
     if (c === quote) return j
   }
   return src.length
+}
+
+// Every rejection message ends with this so an author who wrote real code where a literal belongs
+// learns the rule, not just the symptom. Individual messages name the construct that was rejected.
+const PURE_LITERAL_HINT = "meta must be a pure literal (no expressions, calls, or references)"
+// Untrusted input has no execution timeout anymore, so a pathological `[[[[…]]]]` or `{a:{a:…}}`
+// would otherwise stack-overflow the recursive descent. Real meta nests ~3 deep; 64 is ample.
+const MAX_META_DEPTH = 64
+
+/**
+ * Strictly parse the extracted `{…}` meta literal into a plain value WITHOUT executing anything.
+ * This is a validate-then-build recursive-descent parser over a closed grammar:
+ *   object literals with identifier or plain-string keys; values limited to string literals
+ *   (single/double/no-interpolation backtick), number literals (incl. negative), true/false/null,
+ *   arrays of accepted values, and nested object literals. Comments and trailing commas are
+ *   tolerated. Every expression form (computed keys, spreads, methods, getters/setters, template
+ *   interpolation, function/arrow values, bare identifiers, method calls) is rejected by name.
+ * Objects are built with a null prototype so a `__proto__` key (already rejected) can never
+ * pollute Object.prototype the way the old throwaway-context evaluator could.
+ */
+function parseMetaLiteral(src: string): unknown {
+  return new MetaLiteralParser(src).parse()
+}
+
+class MetaLiteralParser {
+  private pos = 0
+  constructor(private readonly src: string) {}
+
+  parse(): unknown {
+    // metaSrc always begins at the meta object's `{` (parseWorkflow located it), so this is an
+    // object; parseValue keeps the dispatch uniform and still reports a good error otherwise.
+    const value = this.parseValue(1)
+    this.skipTrivia()
+    if (this.pos < this.src.length) {
+      throw this.fail(`unexpected trailing content after the meta literal; ${PURE_LITERAL_HINT}`)
+    }
+    return value
+  }
+
+  private parseValue(depth: number): unknown {
+    if (depth > MAX_META_DEPTH) throw this.fail(`meta literal is nested too deeply (max ${MAX_META_DEPTH})`)
+    this.skipTrivia()
+    const c = this.src[this.pos]
+    if (c === undefined) throw this.fail("unexpected end of meta literal")
+    if (c === "{") return this.parseObject(depth)
+    if (c === "[") return this.parseArray(depth)
+    if (c === '"' || c === "'") return this.parseString(c)
+    if (c === "`") return this.parseTemplate()
+    if (c === "(") throw this.fail(`arrow functions and parenthesized expressions are not allowed; ${PURE_LITERAL_HINT}`)
+    if (c === "-" || (c >= "0" && c <= "9") || c === ".") return this.parseNumber()
+    if (this.isIdentStart(c)) return this.parseKeywordValue()
+    throw this.fail(`unexpected character ${JSON.stringify(c)}; ${PURE_LITERAL_HINT}`)
+  }
+
+  private parseObject(depth: number): Record<string, unknown> {
+    this.pos++ // consume '{'
+    const obj: Record<string, unknown> = Object.create(null)
+    this.skipTrivia()
+    if (this.src[this.pos] === "}") {
+      this.pos++
+      return obj
+    }
+    for (;;) {
+      this.skipTrivia()
+      const c = this.src[this.pos]
+      if (c === undefined) throw this.fail("unterminated meta object")
+      if (c === "[") throw this.fail(`computed keys are not allowed; ${PURE_LITERAL_HINT}`)
+      if (c === ".") throw this.fail(`spread syntax is not allowed; ${PURE_LITERAL_HINT}`)
+
+      const { name, ident } = this.parseKey()
+      if (name === "__proto__" || name === "constructor" || name === "prototype") {
+        throw this.fail(`reserved key "${name}" is not allowed; ${PURE_LITERAL_HINT}`)
+      }
+
+      this.skipTrivia()
+      const sep = this.src[this.pos]
+      if (sep !== ":") {
+        if (sep === "(") throw this.fail(`method definitions are not allowed; ${PURE_LITERAL_HINT}`)
+        if (ident && (name === "get" || name === "set") && this.startsMember(sep)) {
+          throw this.fail(`getters/setters are not allowed; ${PURE_LITERAL_HINT}`)
+        }
+        if (sep === "," || sep === "}") throw this.fail(`shorthand properties are not allowed; ${PURE_LITERAL_HINT}`)
+        if (sep === undefined) throw this.fail("unterminated meta object")
+        throw this.fail(`expected ':' after property name "${name}"; ${PURE_LITERAL_HINT}`)
+      }
+      this.pos++ // consume ':'
+      obj[name] = this.parseValue(depth + 1)
+
+      this.skipTrivia()
+      const after = this.src[this.pos]
+      if (after === ",") {
+        this.pos++
+        this.skipTrivia()
+        if (this.src[this.pos] === "}") {
+          this.pos++ // trailing comma
+          return obj
+        }
+        continue
+      }
+      if (after === "}") {
+        this.pos++
+        return obj
+      }
+      if (after === "." || after === "(") {
+        throw this.fail(`method calls and property access are not allowed; ${PURE_LITERAL_HINT}`)
+      }
+      if (after === undefined) throw this.fail("unterminated meta object")
+      throw this.fail(`expected ',' or '}' after a property value; ${PURE_LITERAL_HINT}`)
+    }
+  }
+
+  private parseArray(depth: number): unknown[] {
+    this.pos++ // consume '['
+    const arr: unknown[] = []
+    this.skipTrivia()
+    if (this.src[this.pos] === "]") {
+      this.pos++
+      return arr
+    }
+    for (;;) {
+      this.skipTrivia()
+      const c = this.src[this.pos]
+      if (c === undefined) throw this.fail("unterminated meta array")
+      if (c === ".") throw this.fail(`spread syntax is not allowed; ${PURE_LITERAL_HINT}`)
+      if (c === ",") throw this.fail(`elided array elements (holes) are not allowed; ${PURE_LITERAL_HINT}`)
+      arr.push(this.parseValue(depth + 1))
+
+      this.skipTrivia()
+      const after = this.src[this.pos]
+      if (after === ",") {
+        this.pos++
+        this.skipTrivia()
+        if (this.src[this.pos] === "]") {
+          this.pos++ // trailing comma
+          return arr
+        }
+        continue
+      }
+      if (after === "]") {
+        this.pos++
+        return arr
+      }
+      if (after === "." || after === "(") {
+        throw this.fail(`method calls and property access are not allowed; ${PURE_LITERAL_HINT}`)
+      }
+      if (after === undefined) throw this.fail("unterminated meta array")
+      throw this.fail(`expected ',' or ']' in a meta array; ${PURE_LITERAL_HINT}`)
+    }
+  }
+
+  /** A property key: a plain string literal or a bare identifier. Anything else is an expression. */
+  private parseKey(): { name: string; ident: boolean } {
+    const c = this.src[this.pos]
+    if (c === '"' || c === "'") return { name: this.parseString(c), ident: false }
+    if (c === "`") throw this.fail(`template-literal keys are not allowed; ${PURE_LITERAL_HINT}`)
+    if (this.isIdentStart(c)) return { name: this.readIdentifier(), ident: true }
+    throw this.fail(`expected a property name; ${PURE_LITERAL_HINT}`)
+  }
+
+  /** true/false/null are the only bare words a value may be; everything else is a reference. */
+  private parseKeywordValue(): unknown {
+    const word = this.readIdentifier()
+    if (word === "true") return true
+    if (word === "false") return false
+    if (word === "null") return null
+    if (word === "function" || word === "async") {
+      throw this.fail(`function values are not allowed; ${PURE_LITERAL_HINT}`)
+    }
+    if (word === "undefined") throw this.fail(`\`undefined\` is not a literal; ${PURE_LITERAL_HINT}`)
+    throw this.fail(`bare identifier \`${word}\` is not allowed as a value; ${PURE_LITERAL_HINT}`)
+  }
+
+  private parseString(quote: string): string {
+    let out = ""
+    let i = this.pos + 1
+    for (; i < this.src.length; i++) {
+      const c = this.src[i]
+      if (c === "\\") {
+        const e = this.decodeEscape(i)
+        out += e.value
+        i = e.next
+        continue
+      }
+      if (c === quote) {
+        this.pos = i + 1
+        return out
+      }
+      if (c === "\n" || c === "\r") throw this.fail("unterminated string literal (raw newline)")
+      out += c
+    }
+    throw this.fail("unterminated string literal in meta")
+  }
+
+  /** A backtick string is accepted ONLY without interpolation — `${…}` is an embedded expression. */
+  private parseTemplate(): string {
+    let out = ""
+    let i = this.pos + 1
+    for (; i < this.src.length; i++) {
+      const c = this.src[i]
+      if (c === "\\") {
+        const e = this.decodeEscape(i)
+        out += e.value
+        i = e.next
+        continue
+      }
+      if (c === "`") {
+        this.pos = i + 1
+        return out
+      }
+      if (c === "$" && this.src[i + 1] === "{") {
+        this.pos = i
+        throw this.fail(`template interpolation \`\${…}\` is not allowed; ${PURE_LITERAL_HINT}`)
+      }
+      out += c
+    }
+    throw this.fail("unterminated template literal in meta")
+  }
+
+  private parseNumber(): number {
+    const m = /^-?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?/.exec(this.src.slice(this.pos))
+    if (!m) throw this.fail(`invalid number literal; ${PURE_LITERAL_HINT}`)
+    this.pos += m[0].length
+    const n = Number(m[0])
+    if (!Number.isFinite(n)) throw this.fail(`invalid number literal; ${PURE_LITERAL_HINT}`)
+    return n
+  }
+
+  /** Decode a backslash escape starting at `i` (src[i] === '\\'). Returns the decoded text and the
+   *  index of the LAST character it consumed, so the caller's loop advances past the whole escape. */
+  private decodeEscape(i: number): { value: string; next: number } {
+    const c = this.src[i + 1]
+    if (c === undefined) throw this.fail("dangling escape in meta string")
+    switch (c) {
+      case "n":
+        return { value: "\n", next: i + 1 }
+      case "t":
+        return { value: "\t", next: i + 1 }
+      case "r":
+        return { value: "\r", next: i + 1 }
+      case "b":
+        return { value: "\b", next: i + 1 }
+      case "f":
+        return { value: "\f", next: i + 1 }
+      case "v":
+        return { value: "\v", next: i + 1 }
+      case "\n":
+        return { value: "", next: i + 1 } // line continuation
+      case "\r":
+        return { value: "", next: this.src[i + 2] === "\n" ? i + 2 : i + 1 } // CRLF or lone CR
+      case "x": {
+        const hex = this.src.slice(i + 2, i + 4)
+        if (!/^[0-9a-fA-F]{2}$/.test(hex)) throw this.fail("invalid \\x escape in meta string")
+        return { value: String.fromCharCode(parseInt(hex, 16)), next: i + 3 }
+      }
+      case "u": {
+        if (this.src[i + 2] === "{") {
+          const end = this.src.indexOf("}", i + 3)
+          const hex = end < 0 ? "" : this.src.slice(i + 3, end)
+          if (!/^[0-9a-fA-F]+$/.test(hex)) throw this.fail("invalid \\u{…} escape in meta string")
+          const cp = parseInt(hex, 16)
+          if (cp > 0x10ffff) throw this.fail("code point out of range in \\u{…} escape")
+          return { value: String.fromCodePoint(cp), next: end }
+        }
+        const hex = this.src.slice(i + 2, i + 6)
+        if (!/^[0-9a-fA-F]{4}$/.test(hex)) throw this.fail("invalid \\u escape in meta string")
+        return { value: String.fromCharCode(parseInt(hex, 16)), next: i + 5 }
+      }
+    }
+    // Octal escapes are forbidden in strict-mode string literals; reject to stay strict.
+    const after = this.src[i + 2] ?? ""
+    if ((c >= "1" && c <= "9") || (c === "0" && after >= "0" && after <= "9")) {
+      throw this.fail("octal escapes are not allowed in meta strings")
+    }
+    if (c === "0") return { value: "\0", next: i + 1 }
+    // Any other escaped char denotes itself (\\, \', \", \`, \/, …) — matches JS string semantics.
+    return { value: c, next: i + 1 }
+  }
+
+  private skipTrivia(): void {
+    const s = this.src
+    for (;;) {
+      const c = s[this.pos]
+      if (c === " " || c === "\t" || c === "\n" || c === "\r" || c === "\f" || c === "\v") {
+        this.pos++
+        continue
+      }
+      if (c === "/" && s[this.pos + 1] === "/") {
+        const nl = s.indexOf("\n", this.pos + 2)
+        this.pos = nl < 0 ? s.length : nl
+        continue
+      }
+      if (c === "/" && s[this.pos + 1] === "*") {
+        const end = s.indexOf("*/", this.pos + 2)
+        this.pos = end < 0 ? s.length : end + 2
+        continue
+      }
+      break
+    }
+  }
+
+  private isIdentStart(c: string | undefined): boolean {
+    return c !== undefined && /[A-Za-z_$]/.test(c)
+  }
+
+  /** True if `c` could begin a property name — used to tell a getter/setter apart from a `get:` key. */
+  private startsMember(c: string | undefined): boolean {
+    return this.isIdentStart(c) || c === '"' || c === "'" || c === "`" || c === "["
+  }
+
+  private readIdentifier(): string {
+    const m = /^[A-Za-z_$][A-Za-z0-9_$]*/.exec(this.src.slice(this.pos))
+    if (!m) throw this.fail(`expected an identifier; ${PURE_LITERAL_HINT}`)
+    this.pos += m[0].length
+    return m[0]
+  }
+
+  private fail(message: string): WorkflowSyntaxError {
+    return new WorkflowSyntaxError(message)
+  }
 }
 
 const DETERMINISM_PRELUDE = `

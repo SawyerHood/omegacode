@@ -275,12 +275,25 @@ Because workflow files are **agent-authored** (untrusted), the engine runs them 
 Workflows run — a **live async coroutine inside a hardened `node:vm`**, plus a journal:
 
 1. **Compile.** Extract and validate the leading `export const meta = {…}` literal (it must be the
-   file's first statement; the literal is evaluated alone in a throwaway, codegen-disabled vm
-   context), strip it while preserving line numbers, and compile the body to a `vm.Script` with
-   `importModuleDynamically` throwing. Workflow files are **plain JavaScript** — no TypeScript, no
-   imports. *(The original sketch's acorn AST parse, esbuild TS support, and per-`await`
-   `Promise.resolve` trampoline were **not shipped**; the meta literal is brace-scanned + vm-evaluated
+   file's first statement; the braces are located by a comment-/string-aware brace scanner and then
+   parsed by a strict, zero-execution literal parser — see below), strip it while preserving line
+   numbers, and compile the body to a `vm.Script` with `importModuleDynamically` throwing. Workflow
+   files are **plain JavaScript** — no TypeScript, no imports. *(The original sketch's acorn AST
+   parse, esbuild TS support, and per-`await` `Promise.resolve` trampoline were **not shipped**; the
+   meta literal is brace-scanned and parsed by a hand-rolled recursive-descent literal parser
    instead.)*
+
+   **The meta literal is parsed, never executed.** Because workflow files are untrusted, `meta` must
+   be a *pure literal* — and the parser enforces that structurally rather than by running the code.
+   An earlier build vm-evaluated `("+metaSrc+")"` in a throwaway, codegen-disabled context guarded
+   only by a 1s timeout; that still *executed* anything smuggled into the "literal" — method calls
+   (`{name: "x".repeat(1e9)}`), getters, `__proto__`/`constructor` writes, computed keys, and
+   `${…}` template interpolation — and `__proto__` writes could pollute the throwaway context's
+   prototype. The strict parser accepts a closed grammar (object literals with identifier/plain-string
+   keys; string/number/boolean/null scalars; no-interpolation backtick strings; arrays; nested
+   objects; comments and trailing commas tolerated) and rejects every expression form by name with a
+   `WorkflowSyntaxError`. Objects are built with a null prototype, so a `__proto__` key (itself
+   rejected) can never reach `Object.prototype`.
 2. **Sandbox.** Run it in a `vm.createContext(globals, { codeGeneration: { strings: false, wasm:
    false } })` — no `eval`/`new Function`/wasm-from-bytes — with no host globals reachable (no
    `require`, `process`, `fs`, `fetch`, `import`). Inject only the DSL globals (`agent`, `parallel`,

@@ -25,8 +25,8 @@ repo's source, classified ~98 features, and a Claude synthesis agent wrote the r
 - **`agent({ phase })` honored**; **`maxTurns` added to the resume cache key**.
 
 Still open (mostly intentional CLI-first scope, see punch-list): the model-facing Workflow *tool*
-layer, the named-workflow registry, nested `workflow()`, `agentType`, the acorn pure-literal `meta`
-evaluator, and interactive UI controls (stop/pause/save).
+layer, the named-workflow registry, nested `workflow()`, `agentType`, and interactive UI controls
+(stop/pause/save). The strict pure-literal `meta` parser has since shipped (see Meta safety).
 
 ---
 
@@ -56,7 +56,7 @@ Tally across 98 catalogued features: **26 parity · 36 partial · 23 missing · 
 - **Frozen intrinsics / SES-style hardening** *(missing)* — Freeze `Promise/Object/Array/Date/Math/...` and apply override guards so the determinism shims can't be reassigned off an unfrozen global.
 
 **Meta safety:**
-- **Strict pure-literal `meta` evaluator** *(missing)* — B does `new Script('(' + metaSrc + ')')`, which *executes* method calls, computed keys, spread, and reserved keys (`__proto__`/`constructor`) that A rejects at the AST level. Replace the regex+VM-eval with an acorn parse + literal-only evaluator anchored to the first statement.
+- **Strict pure-literal `meta` evaluator** *(shipped)* — B previously did `new Script('(' + metaSrc + ')')`, which *executed* method calls, computed keys, spread, template interpolation, and reserved keys (`__proto__`/`constructor`) under only a 1s timeout. Now `parseWorkflow` locates the braces with the comment-/string-aware scanner and hands them to a hand-rolled recursive-descent literal parser (`parseMetaLiteral`) that accepts a closed pure-literal grammar and rejects every expression form by name — no acorn dependency, no execution. Objects are built with a null prototype so a `__proto__` key cannot pollute `Object.prototype`.
 
 **Tool / integration layer (entire class missing — B is CLI-first):**
 - **Model-facing `Workflow` tool, inline `{script}` input, `name` input, async-launch result (`taskId`/`runId`/task-notification)** *(all missing)* — Required for tool-call parity. Build a tool entrypoint that accepts `{script | scriptPath | name, args, resumeFromRunId}`, persists inline scripts to `scripts/<slug>-<runId>.js`, launches detached, and returns immediately.
@@ -102,7 +102,7 @@ Tally across 98 catalogued features: **26 parity · 36 partial · 23 missing · 
 ## Prioritized punch-list to 100% parity
 
 1. **Seal the determinism holes** (correctness): rewire `RealDate.prototype.constructor`, `Object.freeze` `RealDate`/`Math`, freeze intrinsics. *(Replay soundness — highest risk.)*
-2. **Replace the meta evaluator** with an acorn pure-literal parser anchored to the first statement; reject code in `meta`. *(Security/correctness.)*
+2. ~~**Replace the meta evaluator** with a pure-literal parser anchored to the first statement; reject code in `meta`.~~ **Done** — `parseMetaLiteral` is a strict, zero-execution recursive-descent parser (no acorn dependency) that rejects every expression form in `meta`. *(Security/correctness.)*
 3. **Inject `budget` and `workflow()` globals + add `agentType`** — close the three authoring-incompatible global/opt gaps so A-authored scripts run unchanged. Key `agentType`.
 4. **Build the model-facing `Workflow` tool**: `{script | scriptPath | name}` inputs, inline-script persistence, async-launch result (`taskId`/`runId`/notification).
 5. **Add the named-workflow registry** (user/project/built-in tiers) so `name` resolves and built-ins surface as commands.
