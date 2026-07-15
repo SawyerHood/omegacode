@@ -106,7 +106,7 @@ const c = await parallel(b.map(...))
 ```
 that middle transform doesn't need the barrier. Rewrite as a pipeline with the transform inside a stage. When in doubt: pipeline.
 
-Concurrent agent() calls are capped at 100 per workflow by default (override with `--concurrency N`) — excess calls queue and run as slots free up. You can pass more items than the cap to parallel()/pipeline() and they all complete; only up to the cap run at any moment. Total agent count across a workflow's lifetime is capped at 1000 — a runaway-loop backstop set far above any real workflow. A single parallel()/pipeline() call accepts at most 4096 items; passing more is an explicit error, not a silent truncation.
+Concurrent agent() calls are capped at 16 per workflow by default (override with `--concurrency N`) — excess calls queue and run as slots free up. You can pass more items than the cap to parallel()/pipeline() and they all complete; only up to the cap run at any moment. Total agent count across a workflow's lifetime is capped at 1000 — a runaway-loop backstop set far above any real workflow. A single parallel()/pipeline() call accepts at most 1000 items (and never more than the lifetime cap still allows); a fan-out wider than the remaining allowance is rejected up front — an explicit error before any agent starts, not a silent truncation. Admission counts each branch as one agent (width == agents), matching the idiomatic one-agent-per-branch fan-out; a wide fan-out of pure-transform thunks that spawn no agent() is therefore rejected too — for pure concurrent work use Promise.all/.map, not parallel().
 
 The canonical multi-stage pattern — pipeline by default, each dimension verifies as soon as its review completes:
 ```js

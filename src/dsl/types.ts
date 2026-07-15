@@ -147,8 +147,14 @@ export const DEFAULTS: Omit<RunDefaults, "cwd"> = {
   provider: "codex",
   sandbox: "read-only",
   approval: "never",
-  concurrency: 100,
+  // Bounded out of the box: an unqualified parallel() of N thunks otherwise launches N PAID
+  // subagents at once — real money, rate-limit thundering herd, and N concurrent subprocesses for
+  // per-query providers. 16 mirrors Claude Code's cap ceiling; --concurrency lifts it deliberately.
+  concurrency: 16,
   maxAgents: 1000,
-  maxFanout: 4096,
+  // A single fan-out can never usefully be wider than the lifetime cap: the (maxAgents+1)th agent
+  // trips maxAgents mid-run regardless. Keep this <= maxAgents so the static ceiling stays coherent;
+  // the dynamic remaining-allowance pre-check in parallel()/pipeline() is the real per-call guard.
+  maxFanout: 1000,
   budget: null,
 }

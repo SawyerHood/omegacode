@@ -486,10 +486,45 @@ export class Runtime {
     return { ...created, gitRoot }
   }
 
+  /**
+   * Fan-out admission: refuse a call whose immediate width already exceeds the REMAINING lifetime
+   * agent allowance, BEFORE any agent starts. Without this, a wide fan-out (e.g. 2000 items under a
+   * 1000-agent lifetime cap) passes the per-call fan-out cap, launches, spends ~1000 paid agents,
+   * then the (cap+1)th agent() throws the runaway-loop WorkflowError — which is control-flow in the
+   * catch handlers below and aborts the whole fan-out after the money is gone. Failing here converts
+   * that mid-run blow-up into an immediate, zero-cost error.
+   *
+   * Conservative, not clairvoyant, in BOTH directions — `width` is the immediate branch count and is
+   * counted as one agent per branch, which is neither an upper nor a lower bound on what a branch
+   * actually spawns:
+   *   - Under-rejection: a body that spawns several agents, a pipeline's later stages, and nested
+   *     parallel()/pipeline() calls are all invisible here and can still trip the lifetime cap
+   *     mid-run — that backstop (the ++agentCalls check in agentImpl) stays.
+   *   - Over-rejection: a fan-out whose branches spawn FEWER than one agent each (pure-transform
+   *     thunks, a conditional agent() that rarely fires) is rejected once `width > remaining` even
+   *     though it would start ~zero agents and trip nothing. This is the deliberate width==agents
+   *     trade-off: parallel()/pipeline() are agent-orchestration primitives, so width tracks the
+   *     idiomatic one-agent-per-branch fan-out; pure concurrent work belongs in Promise.all/.map,
+   *     not here (see SKILL.md). There is no CLI override for the cap, so such a fan-out must be
+   *     narrowed or split rather than lifted past the ceiling.
+   * This guard just kills the obvious, common footgun cheaply; it is not a precise agent count.
+   */
+  private checkFanoutAdmission(name: "parallel" | "pipeline", width: number): void {
+    // agentCalls counts agents already admitted (see agentImpl); remaining is what the lifetime cap
+    // still allows. `>` mirrors the cap's own `++agentCalls > maxAgents` boundary: a width equal to
+    // remaining fits exactly, one more cannot.
+    const remaining = this.o.defaults.maxAgents - this.agentCalls
+    if (width > remaining)
+      throw new WorkflowError(
+        `${name}(): ${width} items exceeds the remaining agent allowance (${remaining} of ${this.o.defaults.maxAgents}) — would trip the lifetime agent cap mid-run`,
+      )
+  }
+
   private async parallel<T>(thunks: Array<() => Promise<T>>): Promise<T[]> {
     if (!Array.isArray(thunks)) throw new WorkflowError("parallel() expects an array of functions")
     if (thunks.length > this.o.defaults.maxFanout)
       throw new WorkflowError(`parallel(): ${thunks.length} items exceeds the ${this.o.defaults.maxFanout} fan-out cap`)
+    this.checkFanoutAdmission("parallel", thunks.length)
     // Each fan-out CALL is its own lineage node, keyed by this branch's call counter: two
     // sequential identical parallel() calls in one branch must derive distinct child lineages, or
     // their agents collide on the same journal slots → wrong-result replay on resume (C1).
@@ -518,6 +553,9 @@ export class Runtime {
     if (!Array.isArray(items)) throw new WorkflowError("pipeline() expects an array as the first argument")
     if (items.length > this.o.defaults.maxFanout)
       throw new WorkflowError(`pipeline(): ${items.length} items exceeds the ${this.o.defaults.maxFanout} fan-out cap`)
+    // Only stage-1 width is knowable up front: every item enters stage 1, but later stages run only
+    // for non-null predecessors and each stage may call agent() an unpredictable number of times.
+    this.checkFanoutAdmission("pipeline", items.length)
     // Same call-counter lineage as parallel(): repeated identical pipeline() calls stay distinct.
     const ctx = this.ctx()
     const callKey = branchKey(ctx.branchKey, "pipeline", ctx.fanoutIndex++)

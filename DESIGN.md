@@ -438,13 +438,22 @@ clean-vs-dirty/preserve-on-changes semantics are identical.)
 
 ## 8. Concurrency, caps, budget
 
-- **Concurrency cap** (default 100, `--concurrency`): a semaphore gates how many `runAgent`
+- **Concurrency cap** (default 16, `--concurrency`): a semaphore gates how many `runAgent`
   calls execute at once; `parallel`/`pipeline` submit all thunks but only N run concurrently. The cap is
   global across providers. Codex agents multiplex over one app-server process (a **process pool** is the
   escape hatch if it saturates); Claude agents are one subprocess per `query()`, so under wide Claude
   fan-out the cap also bounds subprocess count — consider a session pool if startup overhead bites.
 - **Lifetime agent cap** (default 1000): a runaway-loop backstop; exceeding it throws.
-- **Fan-out cap** per `parallel`/`pipeline` call (default 4096): explicit error, not silent truncation.
+- **Fan-out cap** per `parallel`/`pipeline` call (default 1000, `<=` the lifetime cap): explicit error,
+  not silent truncation. On top of this static ceiling, each fan-out is admission-checked against the
+  *remaining* lifetime allowance (`maxAgents` minus agents already spawned) — a call whose immediate
+  width would overshoot the lifetime cap throws up front, before any paid agent starts, instead of
+  running until it trips the cap mid-fan-out and aborts. The check guards only the immediate width;
+  multi-agent bodies, later pipeline stages, and nested fan-outs can still hit the cap mid-run.
+  Admission counts each branch as one agent (width == agents): this matches the idiomatic
+  one-agent-per-branch fan-out but also rejects a wide fan-out whose branches spawn few or no agents
+  (pure-transform thunks). There is no CLI override for the cap, so such a fan-out must be narrowed or
+  split; pure concurrent work belongs in `Promise.all`/`.map`, not `parallel`/`pipeline`.
 - **Budget** (output-token ceiling): set with `--budget N` and surfaced to the workflow as the injected
   `budget = { total, spent(), remaining() }` global. The ceiling is hard — once `spent()` reaches `total`,
   further `agent()` calls throw. With no `--budget` the ceiling is inert (`total` is `null`). *(This was
@@ -599,8 +608,8 @@ already reads files). Noted as a future direction.
   shipped**). Per-run defaults resolve in decreasing precedence: CLI flags
   (`--provider`/`--model`/`--effort`/`--sandbox`/`--cwd`/`--concurrency`/`--budget`), then `meta`
   (`defaultProvider`/`defaultModel`/`defaultSandbox`), then the built-in `DEFAULTS`
-  (`provider: codex`, `sandbox: read-only`, `approval: never`, `concurrency: 100`,
-  `maxAgents: 1000`, `maxFanout: 4096`). The codex app-server binary can be overridden via the `CODEX_BIN`
+  (`provider: codex`, `sandbox: read-only`, `approval: never`, `concurrency: 16`,
+  `maxAgents: 1000`, `maxFanout: 1000`). The codex app-server binary can be overridden via the `CODEX_BIN`
   environment variable, and the data dir (default `~/.omegacode`) via `OMEGACODE_HOME`.
 
 ---

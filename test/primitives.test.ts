@@ -470,6 +470,109 @@ test("maxFanout cap throws for parallel()", async () => {
   }
 })
 
+test("safer defaults: concurrency is bounded and fan-out cap never exceeds the lifetime cap", () => {
+  // Out of the box a careless parallel() must not launch a herd of paid subagents at once, and a
+  // single fan-out must not be allowed wider than the lifetime cap can ever admit.
+  assert.equal(DEFAULTS.concurrency, 16)
+  assert.ok(DEFAULTS.maxFanout <= DEFAULTS.maxAgents, "maxFanout must be <= maxAgents to stay coherent")
+})
+
+test("fan-out admission: a width past the REMAINING allowance throws up front, zero agents started", async () => {
+  // The footgun this guards: after spending most of the lifetime budget, a fan-out that overshoots
+  // the remainder used to launch, pay for what fit, then trip the runaway-loop cap mid-run and abort.
+  // maxAgents 5, spend 3 sequentially, then parallel(3): remaining is 2 < 3 → reject before any of
+  // the fan-out's agents run. worker.calls stays at exactly the 3 pre-spent agents.
+  const b = build({ defaults: { maxAgents: 5 } })
+  try {
+    await assert.rejects(
+      runBody(
+        b,
+        `await agent("1"); await agent("2"); await agent("3");
+         return await parallel([() => agent("a"), () => agent("b"), () => agent("c")])`,
+      ),
+      /remaining agent allowance/,
+    )
+    assert.equal(b.worker.calls.length, 3, "no fan-out agent should have started")
+  } finally {
+    b.cleanup()
+  }
+})
+
+test("fan-out admission: pipeline() also rejects a stage-1 width past the remaining allowance", async () => {
+  // Only the immediate stage-1 width (items.length) is knowable up front; the check guards that.
+  const b = build({ defaults: { maxAgents: 2 } })
+  try {
+    await assert.rejects(
+      runBody(b, `return await pipeline([1, 2, 3], async (p) => await agent("s:" + p))`),
+      /pipeline\(\): 3 items exceeds the remaining agent allowance/,
+    )
+    assert.equal(b.worker.calls.length, 0, "no pipeline agent should have started")
+  } finally {
+    b.cleanup()
+  }
+})
+
+test("fan-out admission: a width WITHIN the remaining allowance still runs to completion", async () => {
+  // The boundary must admit exactly `remaining` items: maxAgents 3, no prior spend, parallel(3) fits.
+  const b = build({ defaults: { maxAgents: 3 } })
+  try {
+    const out = (await runBody(
+      b,
+      `return await parallel([() => agent("a"), () => agent("b"), () => agent("c")])`,
+    )) as unknown[]
+    assert.deepEqual(out, ["echo:a", "echo:b", "echo:c"])
+    assert.equal(b.worker.calls.length, 3)
+  } finally {
+    b.cleanup()
+  }
+})
+
+test("fan-out admission counts WIDTH as agents: a wide pure-thunk fan-out is rejected even though it spawns none", async () => {
+  // Deliberate width==agents trade-off (see checkFanoutAdmission): the primitive cannot know upfront
+  // how many agents a branch spawns, so it counts each branch as one. A fan-out wider than the
+  // remaining allowance is rejected even when the thunks call no agent() — pure concurrent work
+  // belongs in Promise.all/.map, not parallel(). This test pins the trade-off so it can't flip silently.
+  const b = build({ defaults: { maxAgents: 2 } })
+  try {
+    await assert.rejects(
+      runBody(b, `return await parallel([() => Promise.resolve(1), () => Promise.resolve(2), () => Promise.resolve(3)])`),
+      /remaining agent allowance/,
+    )
+    assert.equal(b.worker.calls.length, 0)
+  } finally {
+    b.cleanup()
+  }
+})
+
+test("--concurrency override is honored: the semaphore caps how many agents run at once", async () => {
+  // Prove the cap actually gates overlap. Each agent increments an in-flight counter on entry and
+  // only resolves once `expected` agents have piled up (or a short deadline passes), recording the
+  // peak. With concurrency 2 across a fan-out of 4, the peak must be exactly 2 — never all 4.
+  let inFlight = 0
+  let peak = 0
+  const expected = 2
+  const b = build({
+    defaults: { concurrency: expected },
+    hooks: {
+      run: async (s) => {
+        inFlight++
+        peak = Math.max(peak, inFlight)
+        // Give siblings a chance to pile up before releasing, so the semaphore's ceiling is observable.
+        await new Promise((r) => setTimeout(r, 5))
+        inFlight--
+        return { text: `echo:${s.prompt}`, status: "completed", usage: { ...emptyUsage(), outputTokens: 1 } }
+      },
+    },
+  })
+  try {
+    await runBody(b, `return await parallel([() => agent("a"), () => agent("b"), () => agent("c"), () => agent("d")])`)
+    assert.equal(b.worker.calls.length, 4)
+    assert.equal(peak, expected, "the concurrency override must cap simultaneous agents at 2")
+  } finally {
+    b.cleanup()
+  }
+})
+
 test("parallel() rejects a non-function entry", async () => {
   const b = build()
   try {
