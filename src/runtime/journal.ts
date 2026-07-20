@@ -5,6 +5,7 @@ import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, write
 import { dirname, join } from "node:path"
 import { homedir } from "node:os"
 import type { AgentStatus, AgentUsage, ProviderId } from "../dsl/types.js"
+import type { BbRunContext } from "./bb-context.js"
 
 export interface JournalMeta {
   type: "meta"
@@ -14,6 +15,8 @@ export interface JournalMeta {
   args: unknown
   seed: number
   createdAt: number
+  /** BB owner captured automatically when launched from a BB thread shell. */
+  bbContext?: BbRunContext | null
   /**
    * Key-hashing scheme version (see keys.ts). A resume against a different version is rejected.
    * Absent in baseline (v1) journals — the field predates them — so absent IS v1 on resume.

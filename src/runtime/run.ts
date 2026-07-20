@@ -7,6 +7,7 @@ import { join, resolve } from "node:path"
 import { DEFAULTS, type Effort, type ProviderId, type RunDefaults, type Sandbox } from "../dsl/types.js"
 import { DefaultWorkerFactory } from "../worker/factory.js"
 import { type EventListener, FileEventSink } from "./event-sink.js"
+import { bbRunContextFromEnv } from "./bb-context.js"
 import { determinismLint, KEY_VERSION } from "./keys.js"
 import {
   checkResumePreconditions,
@@ -100,7 +101,17 @@ export async function runWorkflow(opts: RunOptions): Promise<RunOutcome> {
   opts.onStart?.(runId)
   const journal = new Journal(runId)
   if (!loaded.meta) {
-    journal.append({ type: "meta", runId, workflowFile: filePath, fileHash, args: opts.args ?? null, seed, createdAt: baseTimeMs, keyVersion: KEY_VERSION })
+    journal.append({
+      type: "meta",
+      runId,
+      workflowFile: filePath,
+      fileHash,
+      args: opts.args ?? null,
+      seed,
+      createdAt: baseTimeMs,
+      keyVersion: KEY_VERSION,
+      bbContext: bbRunContextFromEnv(process.env),
+    })
   }
 
   const renderer = new TerminalRenderer({ enabled: !opts.quiet })
