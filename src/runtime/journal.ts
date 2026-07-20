@@ -19,6 +19,12 @@ export interface JournalMeta {
    * Absent in baseline (v1) journals — the field predates them — so absent IS v1 on resume.
    */
   keyVersion?: string
+  /** Owning bb scope captured by the runner when launched from a bb thread shell. */
+  bbContext?: {
+    threadId: string
+    environmentId: string
+    projectId?: string
+  }
 }
 
 export interface JournalStarted {

@@ -15,6 +15,7 @@ import {
   JournalNotFoundError,
   listRunIds,
   type LoadedJournal,
+  type JournalMeta,
   runDir,
   writeResult,
 } from "./journal.js"
@@ -100,7 +101,18 @@ export async function runWorkflow(opts: RunOptions): Promise<RunOutcome> {
   opts.onStart?.(runId)
   const journal = new Journal(runId)
   if (!loaded.meta) {
-    journal.append({ type: "meta", runId, workflowFile: filePath, fileHash, args: opts.args ?? null, seed, createdAt: baseTimeMs, keyVersion: KEY_VERSION })
+    const bbContext = bbContextFromEnvironment(process.env)
+    journal.append({
+      type: "meta",
+      runId,
+      workflowFile: filePath,
+      fileHash,
+      args: opts.args ?? null,
+      seed,
+      createdAt: baseTimeMs,
+      keyVersion: KEY_VERSION,
+      ...(bbContext ? { bbContext } : {}),
+    })
   }
 
   const renderer = new TerminalRenderer({ enabled: !opts.quiet })
@@ -231,4 +243,19 @@ function newRunId(): string {
 
 function randomSeed(): number {
   return randomBytes(4).readUInt32LE(0)
+}
+
+export function bbContextFromEnvironment(
+  env: NodeJS.ProcessEnv,
+): NonNullable<JournalMeta["bbContext"]> | undefined {
+  const threadId = env.BB_THREAD_ID?.trim()
+  const environmentId = env.BB_ENVIRONMENT_ID?.trim()
+  if (!threadId || !environmentId) return undefined
+
+  const projectId = env.BB_PROJECT_ID?.trim()
+  return {
+    threadId,
+    environmentId,
+    ...(projectId ? { projectId } : {}),
+  }
 }
