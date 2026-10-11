@@ -133,13 +133,29 @@ function numberFlag(flags: Flags, name: string): number | undefined {
 
 const PROVIDERS = PROVIDER_IDS
 const SANDBOXES: Sandbox[] = ["read-only", "workspace-write", "danger-full-access"]
-const EFFORTS: Effort[] = ["none", "minimal", "low", "medium", "high", "xhigh", "max"]
+const EFFORTS: Effort[] = ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]
 
 function enumFlag<T extends string>(flags: Flags, name: string, allowed: readonly T[]): T | undefined {
   const raw = str(flags[name])
   if (raw === undefined) return undefined
   if (!(allowed as readonly string[]).includes(raw)) {
     throw new UsageError(`--${name} must be one of ${allowed.join(", ")}, got "${raw}"`)
+  }
+  return raw as T
+}
+
+/** Read an env var as a bare string. Empty = unset (so `export FOO=` never overrides). */
+function strEnv(name: string): string | undefined {
+  const raw = process.env[name]
+  return raw === undefined || raw === "" ? undefined : raw
+}
+
+/** Parse an env var as an enum, throwing a friendly UsageError otherwise. */
+function enumEnv<T extends string>(name: string, allowed: readonly T[]): T | undefined {
+  const raw = strEnv(name)
+  if (raw === undefined) return undefined
+  if (!(allowed as readonly string[]).includes(raw)) {
+    throw new UsageError(`${name} must be one of ${allowed.join(", ")}, got "${raw}"`)
   }
   return raw as T
 }
@@ -378,7 +394,7 @@ function dirSize(dir: string): number {
 async function cmdRun(flags: Flags): Promise<void> {
   const file = (flags._ as string[])[1]
   if (!file) {
-    console.error("usage: omegacode run <file.workflow.js | name> [--args <json>] [--provider codex|claude-code|opencode|pi] [--fake] [--json]")
+    console.error("usage: omegacode run <file.workflow.js | name> [--args <json>] [--provider codex|claude-code|opencode|pi|muse] [--fake] [--json]")
     process.exitCode = 1
     return
   }
@@ -387,13 +403,19 @@ async function cmdRun(flags: Flags): Promise<void> {
   // user's original arg — names re-resolve on the next invocation.
   const resolvedFile = resolveFileOrName(file)
   const overrides: RunOverrides = {}
-  const provider = enumFlag(flags, "provider", PROVIDERS)
+  const flagProvider = enumFlag(flags, "provider", PROVIDERS)
+  const flagModel = str(flags.model)
+  // The env pair is atomic like the flag pair: if either --provider or --model is passed,
+  // both OMEGACODE_* values are ignored, so a flag can never pair with a model from another
+  // site (the gpt-5.5→claude-code leak, now across flag/env). Precedence: flag > env > meta.
+  const useEnvPair = flagProvider === undefined && flagModel === undefined
+  const provider = flagProvider ?? (useEnvPair ? enumEnv("OMEGACODE_PROVIDER", PROVIDERS) : undefined)
   if (provider) overrides.provider = provider
-  const model = str(flags.model)
+  const model = flagModel ?? (useEnvPair ? strEnv("OMEGACODE_MODEL") : undefined)
   if (model) overrides.model = model
-  const effort = enumFlag(flags, "effort", EFFORTS)
+  const effort = enumFlag(flags, "effort", EFFORTS) ?? enumEnv("OMEGACODE_EFFORT", EFFORTS)
   if (effort) overrides.effort = effort
-  const sandbox = enumFlag(flags, "sandbox", SANDBOXES)
+  const sandbox = enumFlag(flags, "sandbox", SANDBOXES) ?? enumEnv("OMEGACODE_SANDBOX", SANDBOXES)
   if (sandbox) overrides.sandbox = sandbox
   const cwd = str(flags.cwd)
   if (cwd) overrides.cwd = resolve(cwd)
@@ -479,6 +501,15 @@ async function cmdValidate(flags: Flags): Promise<void> {
   const { meta } = parseWorkflow(source)
   console.log(`ok: "${meta.name}" — ${meta.description}`)
   if (meta.phases) console.log("phases: " + meta.phases.map((p) => p.title).join(" → "))
+  // Static analysis: fail on unresolvable workflow() refs, advise on smells. Blessed
+  // patterns (dedup barriers, loop-until-dry, conditional phases) never trip these.
+  const { analyzeWorkflow } = await import("./runtime/analyze.js")
+  const { errors, warnings } = analyzeWorkflow(source, { cwd: process.cwd() })
+  for (const w of warnings) console.log(`warn [${w.code}]${w.line ? ` (line ${w.line})` : ""}: ${w.message}`)
+  if (errors.length > 0) {
+    for (const e of errors) console.error(`error [${e.code}]${e.line ? ` (line ${e.line})` : ""}: ${e.message}`)
+    process.exitCode = 1
+  }
 }
 
 /**
@@ -549,6 +580,7 @@ async function cmdDoctor(): Promise<void> {
   const { versionAtLeast } = await import("./worker/subprocess-jsonl.js")
   const { OPENCODE_MIN_VERSION } = await import("./worker/opencode.js")
   const { PI_MIN_VERSION } = await import("./worker/pi.js")
+  const { MUSE_MIN_VERSION } = await import("./worker/muse.js")
 
   const check = (bin: string, args: string[], opts: { env?: NodeJS.ProcessEnv; cwd?: string } = {}): string => {
     try {
@@ -573,6 +605,7 @@ async function cmdDoctor(): Promise<void> {
   const codexBin = process.env.CODEX_BIN ?? "codex"
   const opencodeBin = process.env.OPENCODE_BIN ?? "opencode"
   const piBin = process.env.PI_BIN ?? "pi"
+  const museBin = process.env.MUSE_BIN ?? "muse"
 
   // pi probes run isolated (scratch agent dir, neutral cwd): old binaries wrote lock files and a
   // repo-local .pi even on --version, and 0.79.1 is not confirmed clean.
@@ -590,6 +623,7 @@ async function cmdDoctor(): Promise<void> {
   console.log(`  claude-code  : ${check("claude", ["--version"])}`)
   console.log(`  opencode     : ${withMin(check(opencodeBin, ["--version"]), OPENCODE_MIN_VERSION, "upgrade the opencode CLI")}`)
   console.log(`  pi           : ${withMin(piOut, PI_MIN_VERSION, "npm i -g @earendil-works/pi-coding-agent")}`)
+  console.log(`  muse         : ${withMin(check(museBin, ["--version"]), MUSE_MIN_VERSION, "upgrade the Muse Code CLI")}`)
   console.log(`  data dir     : ${dataRoot()}`)
 }
 
@@ -642,7 +676,7 @@ Each agent() spawns a real Codex (gpt-5.x) or Claude Code agent; you pick the pr
 Usage:
   omegacode run <file.workflow.js | name> [options]   Run a workflow (by path or saved name)
       --args '<json>' | --args-file <f>    input exposed as the \`args\` global
-      --provider codex|claude-code|opencode|pi   default provider (per-agent opts override)
+      --provider codex|claude-code|opencode|pi|muse   default provider (per-agent opts override)
       --model <m>                          default model — set together with --provider (both or neither)
       --effort <e>  --sandbox read-only|workspace-write|danger-full-access
       --cwd <dir>  --concurrency <N>       working dir; max concurrent agents (default ${DEFAULTS.concurrency})
@@ -652,6 +686,10 @@ Usage:
       --json                               print {runId,status,url,result,error} as JSON (viewer still starts)
       --open                               also open the browser to this run
       --no-serve                           don't auto-start the viewer
+
+  Env defaults (used when the matching flag is absent; flags always win):
+      OMEGACODE_PROVIDER OMEGACODE_MODEL   provider+model pair (both or neither, like the flags)
+      OMEGACODE_EFFORT OMEGACODE_SANDBOX   default effort / sandbox
 
   By default \`run\` auto-starts the viewer (if not already up) and prints the run's URL
   (with --json the URL is in the JSON \`url\` field and the \`view:\` line is suppressed).

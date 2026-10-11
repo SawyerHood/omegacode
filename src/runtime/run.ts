@@ -3,7 +3,7 @@
 
 import { createHash, randomBytes } from "node:crypto"
 import { readFileSync, writeFileSync } from "node:fs"
-import { join, resolve } from "node:path"
+import { dirname, join, resolve } from "node:path"
 import { DEFAULTS, type Effort, type ProviderId, type RunDefaults, type Sandbox } from "../dsl/types.js"
 import { DefaultWorkerFactory } from "../worker/factory.js"
 import { type EventListener, FileEventSink } from "./event-sink.js"
@@ -20,6 +20,7 @@ import {
 } from "./journal.js"
 import { checkProviderModelPair, checkSpecEnum, Runtime } from "./primitives.js"
 import { parseWorkflow } from "./sandbox.js"
+import { analyzeWorkflow } from "./analyze.js"
 import { TerminalRenderer } from "./progress.js"
 import { runInSandbox } from "./sandbox.js"
 
@@ -38,6 +39,7 @@ export interface RunOverrides {
   /** Binary overrides for the subprocess workers (programmatic equivalent of OPENCODE_BIN/PI_BIN). */
   opencodeBin?: string
   piBin?: string
+  museBin?: string
 }
 
 export interface RunOptions {
@@ -81,6 +83,14 @@ export async function runWorkflow(opts: RunOptions): Promise<RunOutcome> {
   }
 
   const parsed = parseWorkflow(source)
+  // Fail fast on unresolvable workflow() refs — before the run dir, journal and heartbeat
+  // exist. Warnings (loops, phase titles) stay advisory: validate shows them, runs ignore them.
+  const { errors: refErrors } = analyzeWorkflow(source, { cwd: dirname(filePath) })
+  if (refErrors.length > 0) {
+    throw new Error(
+      "workflow analysis failed: " + refErrors.map((e) => `[${e.code}]${e.line ? ` (line ${e.line})` : ""}: ${e.message}`).join("; "),
+    )
+  }
   const defaults = resolveDefaults(parsed.meta, opts)
 
   const runId = opts.resumeRunId ?? newRunId()
@@ -113,6 +123,7 @@ export async function runWorkflow(opts: RunOptions): Promise<RunOutcome> {
     codexBin: process.env.CODEX_BIN,
     opencodeBin: opts.overrides?.opencodeBin ?? process.env.OPENCODE_BIN,
     piBin: opts.overrides?.piBin ?? process.env.PI_BIN,
+    museBin: opts.overrides?.museBin ?? process.env.MUSE_BIN,
     // Claude-specific factory defaults (L5). Only forwarded when the provider is claude-code; a
     // per-call opts.model still overrides via AgentSpec.model.
     claudeModel: opts.overrides?.claudeModel ?? (defaults.provider === "claude-code" ? defaults.model : undefined),
@@ -148,7 +159,7 @@ export async function runWorkflow(opts: RunOptions): Promise<RunOutcome> {
   let status: RunOutcome["status"] = "completed"
   let result: unknown
   let error: string | undefined
-  const runtime = new Runtime({ runId, defaults, factory, journal, loaded, events, args: opts.args, seed, baseTimeMs, signal: ac.signal, declaredPhases: parsed.meta.phases })
+  const runtime = new Runtime({ runId, defaults, factory, journal, loaded, events, args: opts.args, seed, baseTimeMs, signal: ac.signal, declaredPhases: parsed.meta.phases, execTimeoutMs: opts.execTimeoutMs })
   try {
     // The abort signal MUST reach the sandbox (M13 wiring): the vm timeout bounds only synchronous
     // execution, so without it `await new Promise(() => {})` in a workflow body would hang this
@@ -181,7 +192,7 @@ export async function runWorkflow(opts: RunOptions): Promise<RunOutcome> {
   return { runId, result, status, error }
 }
 
-function resolveDefaults(meta: { defaultProvider?: ProviderId; defaultModel?: string; defaultSandbox?: Sandbox }, opts: RunOptions): RunDefaults {
+function resolveDefaults(meta: { defaultProvider?: ProviderId; defaultModel?: string; defaultSandbox?: Sandbox; defaultEffort?: Effort }, opts: RunOptions): RunDefaults {
   const o = opts.overrides ?? {}
   // An invalid concurrency (0 / NaN / fractional) would build a Semaphore that never admits anyone:
   // every agent() queues forever while the heartbeat keeps beating, so the deadman never flags it.
@@ -190,17 +201,24 @@ function resolveDefaults(meta: { defaultProvider?: ProviderId; defaultModel?: st
   if (!Number.isInteger(concurrency) || concurrency < 1) {
     throw new Error(`invalid concurrency: ${concurrency} — must be a positive integer`)
   }
-  // An invalid sandbox/effort from meta.defaultSandbox or a library-caller override would flow
-  // unvalidated into every spec and fall off the worker policy switches (H14) — e.g. "readonly"
-  // (typo for "read-only") becomes effectively writable. Fail here, like concurrency above.
-  // resolveSpec re-checks the resolved per-call values, covering workflow-body opts too.
-  const sandbox = o.sandbox ?? meta.defaultSandbox ?? DEFAULTS.sandbox
-  checkSpecEnum("sandbox", sandbox)
-  checkSpecEnum("effort", o.effort)
+  // An invalid sandbox/effort from meta.defaultSandbox/meta.defaultEffort or a library-caller
+  // override would flow unvalidated into every spec and fall off the worker policy switches
+  // (H14) — e.g. "readonly" (typo for "read-only") becomes effectively writable. Fail here,
+  // like concurrency above. resolveSpec re-checks the resolved per-call values, covering
+  // workflow-body opts too.
   // meta.defaultProvider arrives from an untyped workflow file — a typo here would otherwise ride
   // into every spec and only fail at the factory (or not at all under --fake).
   const provider = o.provider ?? meta.defaultProvider ?? DEFAULTS.provider
   checkSpecEnum("provider", provider)
+  // opencode/pi cannot run confined (their workers reject anything but danger-full-access),
+  // so the read-only DEFAULTS.sandbox auto-upgrades for exactly those providers. codex/claude
+  // keep the confined default unless the run asked otherwise — danger-full-access everywhere
+  // would silently un-confine providers that CAN enforce it.
+  const sandbox =
+    o.sandbox ?? meta.defaultSandbox ?? (provider === "opencode" || provider === "pi" ? "danger-full-access" : DEFAULTS.sandbox)
+  checkSpecEnum("sandbox", sandbox)
+  const effort = o.effort ?? meta.defaultEffort ?? DEFAULTS.effort
+  checkSpecEnum("effort", effort)
   // Both-or-neither per SITE (CLI flags, meta defaults): a lone --model would pair with a provider
   // chosen elsewhere — the gpt-5.5→claude-code leak. Each site supplies the pair atomically, so the
   // field-wise resolution below can never mix a provider from one site with a model from another.
@@ -209,8 +227,8 @@ function resolveDefaults(meta: { defaultProvider?: ProviderId; defaultModel?: st
   checkProviderModelPair(meta.defaultProvider, meta.defaultModel, "meta.defaultProvider/defaultModel")
   return {
     provider,
-    model: o.model ?? meta.defaultModel,
-    effort: o.effort,
+    model: o.model ?? meta.defaultModel ?? DEFAULTS.model,
+    effort,
     sandbox,
     approval: DEFAULTS.approval,
     cwd: resolve(o.cwd ?? process.cwd()),

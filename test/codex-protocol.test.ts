@@ -146,6 +146,7 @@ test("toCodexEffort maps every level (max → xhigh)", () => {
   assert.equal(toCodexEffort("high"), "high")
   assert.equal(toCodexEffort("xhigh"), "xhigh")
   assert.equal(toCodexEffort("max"), "xhigh")
+  assert.equal(toCodexEffort("ultra"), "xhigh") // above codex's range — top tier, never a failure
 })
 
 // ---------------------------------------------------------------------------

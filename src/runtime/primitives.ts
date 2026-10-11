@@ -10,22 +10,32 @@
 // finish in. now()/random() also draw from per-branch substreams.
 
 import { AsyncLocalStorage } from "node:async_hooks"
+import { createHash } from "node:crypto"
+import { existsSync, readFileSync } from "node:fs"
+import { resolve } from "node:path"
 import type {
   AgentOpts,
   AgentResult,
   AgentSpec,
+  AgentUsage,
+  Effort,
   PipelineStage,
+  ProviderId,
   RunDefaults,
+  Sandbox,
   WorkflowGlobals,
+  WorkflowOpts,
 } from "../dsl/types.js"
 import { addUsage, emptyUsage, PROVIDER_IDS } from "../dsl/types.js"
 import type { WorkerFactory, WorkerProgress } from "../worker/index.js"
 import { AgentError, AgentInterrupted } from "../worker/index.js"
 import { withRetry } from "../worker/errors.js"
-import { stripNullOptionals, validate } from "../worker/schema.js"
+import { stripNullOptionals, validate, assertValidSchema } from "../worker/schema.js"
 import { Journal, type LoadedJournal } from "./journal.js"
-import { branchKey, chainKey, explicitKey, keyedSpec, ROOT_KEY } from "./keys.js"
+import { branchKey, chainKey, determinismLint, explicitKey, canonical, keyedSpec, ROOT_KEY } from "./keys.js"
 import type { EventSink } from "./events.js"
+import { parseWorkflow, runInSandbox } from "./sandbox.js"
+import { resolveWorkflowName } from "./registry.js"
 import { AgentTranscript } from "./transcript.js"
 import { Semaphore } from "./semaphore.js"
 import { createWorktree, findGitRoot, teardownWorktree, type Worktree } from "./worktree.js"
@@ -43,7 +53,7 @@ export class AgentFailedError extends WorkflowError {}
 export const SPEC_ENUMS = {
   provider: PROVIDER_IDS,
   sandbox: ["read-only", "workspace-write", "danger-full-access"],
-  effort: ["none", "minimal", "low", "medium", "high", "xhigh", "max"],
+  effort: ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"],
   approval: ["never", "on-request"],
 } as const satisfies Record<string, readonly string[]>
 
@@ -88,6 +98,16 @@ export interface RuntimeOpts {
   signal: AbortSignal
   /** meta.phases, announced as pending phase events up front so the viewer shows the full plan. */
   declaredPhases?: Array<{ title: string; detail?: string }>
+  /** Parent runtime for workflow() nesting: shared journal/events/workers/budget/counters. */
+  parent?: Runtime
+  /** Nesting depth (0 = top-level body). workflow() refuses to nest past 1. */
+  depth?: number
+  /** Lineage root for this runtime's KeyContext (child runtimes derive it from the call site). */
+  rootBranchKey?: string
+  /** Prefix for phase titles emitted under this runtime (child workflows group visibly). */
+  phasePrefix?: string
+  /** Hard ceiling on workflow execution time, forwarded to nested sandbox runs. */
+  execTimeoutMs?: number
 }
 
 /**
@@ -101,6 +121,8 @@ interface KeyContext {
   agentIndex: number
   /** Position of the next parallel()/pipeline() CALL within this branch (see parallel/pipeline). */
   fanoutIndex: number
+  /** Position of the next workflow() CALL within this branch (same collision rule as fan-out). */
+  workflowIndex: number
   nowCounter: number
   rngState: number
 }
@@ -110,7 +132,7 @@ interface KeyContext {
  * journaled), distinct per branch (concurrency-invariant), different across fresh runs.
  */
 function newKeyContext(key: string, runSeed: number): KeyContext {
-  return { branchKey: key, agentIndex: 0, fanoutIndex: 0, nowCounter: 0, rngState: seedFromKey(key, runSeed) }
+  return { branchKey: key, agentIndex: 0, fanoutIndex: 0, workflowIndex: 0, nowCounter: 0, rngState: seedFromKey(key, runSeed) }
 }
 
 /** Derive a non-zero 32-bit rng seed from a branch key hash mixed with the run seed. */
@@ -123,41 +145,67 @@ function seedFromKey(key: string, runSeed: number): number {
 }
 
 export class Runtime {
-  private displayIndex = 0
-  private agentCalls = 0
-  private phaseIndex = 0
+  /** Run-shared tallies (display/phase/agent counters). One box per run — children share it. */
+  private readonly tally: { display: number; phase: number; agents: number }
   private currentPhase: { index: number; title: string } | undefined
-  private readonly phaseByTitle = new Map<string, number>()
+  private readonly phaseByTitle: Map<string, number>
   // Phases that have emitted their non-pending event. A declared phase reserves its index (and
   // emits a pending event) at construction, but is only "announced" when phase() reaches it —
   // that second emit is what places the terminal renderer's header at the right spot in the stream.
-  private readonly announcedPhases = new Set<number>()
+  private readonly announcedPhases: Set<number>
   private readonly sem: Semaphore
   private readonly worktreeMutex = new Semaphore(1)
-  private readonly explicitKeys = new Set<string>()
+  private readonly explicitKeys: Set<string>
   private readonly ctxStore = new AsyncLocalStorage<KeyContext>()
   private readonly rootCtx: KeyContext
   // In-flight agent() promises so the run loop can await settlement and a fire-and-forget agent()
   // (launched without `await`) can't turn into an unhandledRejection crash after "completed".
-  private readonly inFlight = new Set<Promise<unknown>>()
-  totalUsage = emptyUsage()
+  // Shared across nesting: the top-level settle() drains the whole tree.
+  private readonly inFlight: Set<Promise<unknown>>
+  private ownUsage = emptyUsage()
+
+  /** Run-shared token accumulator. Children spend from (and report into) the same budget. */
+  get totalUsage(): AgentUsage {
+    return this.o.parent ? this.o.parent.totalUsage : this.ownUsage
+  }
+  set totalUsage(v: AgentUsage) {
+    if (this.o.parent) this.o.parent.totalUsage = v
+    else this.ownUsage = v
+  }
 
   constructor(private readonly o: RuntimeOpts) {
-    this.sem = new Semaphore(o.defaults.concurrency)
-    this.rootCtx = newKeyContext(ROOT_KEY, o.seed)
-    // Fresh display indices start past anything a prior attempt journaled, so an agent whose key is
-    // NOT in the journal can never collide with a journaled agent's index/transcript (see agentImpl).
-    this.displayIndex = Math.max(0, ...o.loaded.indexByKey.values())
+    const parent = o.parent
+    // Run-shared machinery: a child runtime borrows the parent's semaphore, in-flight set,
+    // key registries and phase map so indices/transcripts never collide across nesting levels.
+    // Only the ambient phase pointer and KeyContext lineage stay per-runtime.
+    this.sem = parent ? parent.sem : new Semaphore(o.defaults.concurrency)
+    this.phaseByTitle = parent ? parent.phaseByTitle : new Map()
+    this.announcedPhases = parent ? parent.announcedPhases : new Set()
+    this.explicitKeys = parent ? parent.explicitKeys : new Set()
+    this.inFlight = parent ? parent.inFlight : new Set()
+    this.tally = parent ? parent.tally : { display: 0, phase: 0, agents: 0 }
+    this.rootCtx = newKeyContext(o.rootBranchKey ?? ROOT_KEY, o.seed)
+    if (!parent) {
+      // Fresh display indices start past anything a prior attempt journaled, so an agent whose key is
+      // NOT in the journal can never collide with a journaled agent's index/transcript (see agentImpl).
+      this.tally.display = Math.max(0, ...o.loaded.indexByKey.values())
+    }
     // Reserve indices 1..N for declared phases in meta order, so phase() calls with matching
     // titles land in their declared slot regardless of execution order. meta.phases isn't
     // shape-validated (it's display-only), so skip entries without a usable title.
     for (const p of o.declaredPhases ?? []) {
       if (typeof p?.title !== "string" || p.title.length === 0) continue
-      if (this.phaseByTitle.has(p.title)) continue
-      const index = ++this.phaseIndex
-      this.phaseByTitle.set(p.title, index)
-      this.o.events.emit({ type: "phase", index, title: p.title, pending: true })
+      const title = this.phaseTitle(p.title)
+      if (this.phaseByTitle.has(title)) continue
+      const index = ++this.tally.phase
+      this.phaseByTitle.set(title, index)
+      this.o.events.emit({ type: "phase", index, title, pending: true })
     }
+  }
+
+  /** Apply this runtime's phase prefix (child workflows group visibly under their ref). */
+  private phaseTitle(title: string): string {
+    return this.o.phasePrefix ? `${this.o.phasePrefix} › ${title}` : title
   }
 
   globals(): WorkflowGlobals {
@@ -171,6 +219,7 @@ export class Runtime {
       agent: this.agent.bind(this) as WorkflowGlobals["agent"],
       parallel: this.parallel.bind(this),
       pipeline: this.pipeline.bind(this),
+      workflow: this.workflow.bind(this) as WorkflowGlobals["workflow"],
       phase: this.phase.bind(this),
       log: this.log.bind(this),
       now: this.now.bind(this),
@@ -199,23 +248,24 @@ export class Runtime {
   }
 
   private ensurePhase(title: string): number {
-    let index = this.phaseByTitle.get(title)
+    const full = this.phaseTitle(title)
+    let index = this.phaseByTitle.get(full)
     if (index === undefined) {
-      index = ++this.phaseIndex
-      this.phaseByTitle.set(title, index)
+      index = ++this.tally.phase
+      this.phaseByTitle.set(full, index)
     }
     // First actual entry emits the non-pending event — even for a declared phase, whose pending
     // event already reserved the index. Folds clear `pending` on this re-emit (same index).
     if (!this.announcedPhases.has(index)) {
       this.announcedPhases.add(index)
-      this.o.events.emit({ type: "phase", index, title })
+      this.o.events.emit({ type: "phase", index, title: full })
     }
     return index
   }
 
   private phase(title: string): void {
     const t = String(title)
-    this.currentPhase = { index: this.ensurePhase(t), title: t }
+    this.currentPhase = { index: this.ensurePhase(t), title: this.phaseTitle(t) }
   }
 
   private log(msg: string): void {
@@ -286,7 +336,7 @@ export class Runtime {
       }
       this.explicitKeys.add(key)
     }
-    if (++this.agentCalls > this.o.defaults.maxAgents) {
+    if (++this.tally.agents > this.o.defaults.maxAgents) {
       throw new WorkflowError(`agent() call cap reached (${this.o.defaults.maxAgents}) — likely a runaway loop`)
     }
     // Display index: stable per JOURNAL KEY across resume attempts (L12). The journal records
@@ -294,10 +344,10 @@ export class Runtime {
     // file agents/<index>.jsonl keep pointing at the same logical agent on resume — a re-run
     // truncates only its OWN transcript, and a cached replay's drilldown finds the original one.
     // Keys not in the journal allocate fresh indices past the journaled maximum (no collision).
-    const index = this.o.loaded.indexByKey.get(key) ?? ++this.displayIndex
+    const index = this.o.loaded.indexByKey.get(key) ?? ++this.tally.display
     const label = opts?.label ?? firstLine(spec.prompt)
     // opts.phase overrides the ambient phase() group for this call.
-    const phaseRef = opts?.phase != null ? { index: this.ensurePhase(String(opts.phase)), title: String(opts.phase) } : this.currentPhase
+    const phaseRef = opts?.phase != null ? { index: this.ensurePhase(String(opts.phase)), title: this.phaseTitle(String(opts.phase)) } : this.currentPhase
     const phaseIndex = phaseRef?.index
     const phaseTitle = phaseRef?.title
 
@@ -544,6 +594,86 @@ export class Runtime {
       }),
     )
   }
+
+  /**
+   * Run a saved workflow inline (one level deep) and return its result. The child shares
+   * this run's journal (namespaced keys), budget, workers, semaphore, signal and viewer
+   * feed — only the KeyContext lineage, args and (optionally) defaults are its own.
+   *
+   * Resume safety: the child lineage mixes the call-site position, the ref, the child's file
+   * hash AND the canonical args — so editing the leaf file, passing different args, or moving
+   * the call all miss the cache and re-run, while an unchanged subtree replays instantly.
+   */
+  private async workflow<T = unknown>(ref: string, args?: unknown, opts?: WorkflowOpts): Promise<T> {
+    const depth = this.o.depth ?? 0
+    if (depth >= 1) {
+      throw new WorkflowError("workflow() nests one level deep: conductors call leaves, leaves may not call workflow()")
+    }
+    if (typeof ref !== "string" || ref.length === 0) throw new WorkflowError("workflow() requires a registry name or file path")
+    if (opts?.schema !== undefined) {
+      try {
+        assertValidSchema(opts.schema)
+      } catch (err) {
+        throw new WorkflowError(`workflow() schema does not compile: ${(err as Error).message}`)
+      }
+    }
+    // Synchronous prefix (like agentImpl): derive the child lineage from THIS branch's position
+    // before any await, so concurrent workflow() calls stay distinct and resume-stable.
+    const ctx = this.ctx()
+    const filePath = resolveWorkflowRef(ref, this.o.defaults.cwd)
+    const source = readFileSync(filePath, "utf8")
+    const fileHash = sha256(source)
+    const lint = determinismLint(source)
+    if (lint.length > 0) {
+      throw new WorkflowError(
+        `determinism lint failed for workflow "${ref}": ` + lint.map((f) => `${f.token} → use ${f.use}`).join("; "),
+      )
+    }
+    const parsed = parseWorkflow(source)
+    const callIndex = ctx.workflowIndex++
+    const lineage = branchKey(
+      ctx.branchKey,
+      `workflow:${ref}:${fileHash.slice(0, 16)}:${sha256(canonical(args ?? null)).slice(0, 16)}`,
+      callIndex,
+    )
+    const agentsBefore = this.tally.agents
+    this.log(`→ workflow "${parsed.meta.name}" (${ref})`)
+    const child = new Runtime({
+      runId: this.o.runId,
+      defaults: resolveChildDefaults(this.o.defaults, parsed.meta),
+      factory: this.o.factory,
+      journal: this.o.journal,
+      loaded: this.o.loaded,
+      events: this.o.events,
+      args,
+      seed: this.o.seed,
+      baseTimeMs: this.o.baseTimeMs,
+      signal: this.o.signal,
+      parent: this,
+      depth: depth + 1,
+      rootBranchKey: lineage,
+      phasePrefix: parsed.meta.name,
+      execTimeoutMs: this.o.execTimeoutMs,
+      declaredPhases: parsed.meta.phases,
+    })
+    const result = await runInSandbox({
+      body: parsed.body,
+      filename: filePath,
+      globals: child.globals(),
+      signal: this.o.signal,
+      execTimeoutMs: this.o.execTimeoutMs,
+    })
+    const made = this.tally.agents - agentsBefore
+    this.log(`← workflow "${parsed.meta.name}" → done (${made} agent calls): ${preview(result)}`)
+    if (opts?.schema !== undefined) {
+      // No corrective retry here (unlike agent()): the subtree already spent its budget —
+      // a mismatch means the LEAF shape drifted, so fail loudly and let the author fix it.
+      const check = validate(opts.schema, stripNullOptionals(result, opts.schema))
+      if (!check.ok) throw new WorkflowError(`workflow "${parsed.meta.name}" result failed schema: ${check.errors}`)
+      return stripNullOptionals(result, opts.schema) as T
+    }
+    return result as T
+  }
 }
 
 /**
@@ -554,6 +684,44 @@ export class Runtime {
  */
 function isControlFlow(err: unknown): boolean {
   return err instanceof AgentInterrupted || (err instanceof WorkflowError && !(err instanceof AgentFailedError))
+}
+
+/**
+ * Resolve a workflow() ref the same way the CLI resolves run targets: an existing path wins;
+ * an arg that LOOKS like a path (separator or .js suffix) but doesn't exist is an error rather
+ * than a silent registry fall-through; otherwise look up the registry name across tiers.
+ */
+function resolveWorkflowRef(ref: string, cwd: string): string {
+  if (ref.includes("/") || ref.endsWith(".js")) {
+    const p = resolve(cwd, ref)
+    if (!existsSync(p)) throw new WorkflowError(`workflow file not found: "${ref}" (resolved to ${p})`)
+    return p
+  }
+  return resolveWorkflowName(ref, cwd)
+}
+
+function sha256(s: string): string {
+  return createHash("sha256").update(s).digest("hex")
+}
+
+/**
+ * Child-run defaults: the parent's resolved policy, overridden per-field by the leaf's meta.
+ * The meta provider/model pair stays atomic (a lone half throws — the cross-provider leak).
+ * Everything the leaf meta cannot express (cwd, concurrency, caps, budget, approval) inherits.
+ */
+function resolveChildDefaults(
+  d: RunDefaults,
+  meta: { defaultProvider?: ProviderId; defaultModel?: string; defaultSandbox?: Sandbox; defaultEffort?: Effort },
+): RunDefaults {
+  checkProviderModelPair(meta.defaultProvider, meta.defaultModel, "meta.defaultProvider/defaultModel")
+  const provider = meta.defaultProvider ?? d.provider
+  const model = meta.defaultModel ?? d.model
+  const sandbox = meta.defaultSandbox ?? d.sandbox
+  const effort = meta.defaultEffort ?? d.effort
+  checkSpecEnum("provider", provider)
+  checkSpecEnum("sandbox", sandbox)
+  checkSpecEnum("effort", effort)
+  return { ...d, provider, model, sandbox, effort }
 }
 
 function firstLine(s: string): string {

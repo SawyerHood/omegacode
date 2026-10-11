@@ -53,10 +53,13 @@ export interface ClaudeWorkerOpts {
 }
 
 // The SDK supports low/medium/high/xhigh/max. The codex-only tiers ("none", "minimal") have no
-// Claude equivalent, so they map to the SDK's lowest level; the rest pass through unchanged.
+// Claude equivalent, so they map to the SDK's lowest level; "ultra" (a muse-client-side tier
+// above every API) maps to the SDK's top. The rest pass through unchanged.
 type ClaudeEffort = "low" | "medium" | "high" | "xhigh" | "max"
 function toClaudeEffort(effort: Effort): ClaudeEffort {
-  return effort === "none" || effort === "minimal" ? "low" : effort
+  if (effort === "none" || effort === "minimal") return "low"
+  if (effort === "ultra") return "max"
+  return effort
 }
 
 export class ClaudeWorker implements Worker {

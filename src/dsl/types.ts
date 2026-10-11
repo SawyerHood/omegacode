@@ -1,15 +1,17 @@
 // Shared type contracts for the whole system. Everything compiles against these.
 
 /** The closed set of backend providers. Model strings stay open — each backend is authoritative. */
-export const PROVIDER_IDS = ["codex", "claude-code", "opencode", "pi"] as const
+export const PROVIDER_IDS = ["codex", "claude-code", "opencode", "pi", "muse"] as const
 export type ProviderId = (typeof PROVIDER_IDS)[number]
 
 /** read-only: no writes; workspace-write: write within cwd; danger-full-access: unrestricted. */
 export type Sandbox = "read-only" | "workspace-write" | "danger-full-access"
 
-// Union of both providers' reasoning-effort levels. codex: none/minimal/low/medium/high/xhigh;
-// claude-code: low/medium/high/xhigh/max. Each worker maps to its nearest supported value.
-export type Effort = "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max"
+// Union of all providers' reasoning-effort levels. codex: none/minimal/low/medium/high/xhigh;
+// claude-code: low/medium/high/xhigh/max; pi: off/minimal/low/medium/high/xhigh/max;
+// muse: none/minimal/low/medium/high/xhigh/max/ultra (the full range). Each worker maps to
+// its nearest supported value; only muse passes every level through untouched.
+export type Effort = "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra"
 
 export type Approval = "never" | "on-request"
 
@@ -95,6 +97,8 @@ interface MetaBase {
   description: string
   phases?: Array<{ title: string; detail?: string }>
   defaultSandbox?: Sandbox
+  /** Run-default effort for every agent() that omits opts.effort. CLI --effort / OMEGACODE_EFFORT win. */
+  defaultEffort?: Effort
   whenToUse?: string
 }
 
@@ -111,11 +115,24 @@ export interface WorkflowBudget {
   remaining(): number
 }
 
+/** Options for workflow(): run a saved workflow inline and return its result. */
+export interface WorkflowOpts {
+  /** Validate the child result against this schema (throws WorkflowError on mismatch, no retry). */
+  schema?: JSONSchema
+}
+
 /** The injected globals available inside a workflow file. */
 export interface WorkflowGlobals {
   agent: <T = string>(prompt: string, opts?: AgentOpts) => Promise<T>
   parallel: <T>(thunks: Array<() => Promise<T>>) => Promise<T[]>
   pipeline: (items: unknown[], ...stages: PipelineStage[]) => Promise<unknown[]>
+  /**
+   * Run a saved workflow inline (one level deep) and return its result. `ref` is a
+   * registry name or file path; `args` becomes the child's `args` global. The child
+   * shares this run's journal (namespaced keys), budget, workers and viewer feed —
+   * use it to compose conductors from leaf workflows.
+   */
+  workflow: <T = unknown>(ref: string, args?: unknown, opts?: WorkflowOpts) => Promise<T>
   phase: (title: string) => void
   log: (msg: string) => void
   now: () => number
@@ -144,7 +161,14 @@ export interface RunDefaults {
 }
 
 export const DEFAULTS: Omit<RunDefaults, "cwd"> = {
-  provider: "codex",
+  // Fleet default: backend-agnostic Muse runs. A lone default provider/model pair can never
+  // mix with another site (flag/meta sites are atomic and validated), so these are safe.
+  provider: "opencode",
+  model: "meta/muse-spark-1.3-contributor",
+  effort: "xhigh",
+  // NOTE: sandbox stays read-only here; resolveDefaults upgrades it to danger-full-access
+  // when the resolved provider is opencode/pi (which cannot run otherwise) so codex/claude
+  // keep their confined default.
   sandbox: "read-only",
   approval: "never",
   concurrency: 100,

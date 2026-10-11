@@ -116,7 +116,8 @@ test("opencode: OPENCODE_BIN env drives a real spawn with the exact argv/stdin c
     assert.equal(outcome.result, "ok")
 
     const launch = JSON.parse(readFileSync(record, "utf8")) as Launch
-    assert.deepEqual(launch.argv, ["run", "--format", "json", "--thinking", "--model", "openrouter/foo/bar", "--dangerously-skip-permissions"])
+    // DEFAULTS.effort (xhigh) rides along: on this 1.16.2 fake that means --variant.
+    assert.deepEqual(launch.argv, ["run", "--format", "json", "--thinking", "--variant", "xhigh", "--model", "openrouter/foo/bar", "--dangerously-skip-permissions"])
     // Instructions arrive as a delimited stdin preamble (opencode run has no system-prompt flag).
     assert.equal(launch.stdin, "<instructions>\nbe terse\n</instructions>\n\nhello from workflow")
     assert.equal(realpathSync(launch.cwd), realpathSync(dir))

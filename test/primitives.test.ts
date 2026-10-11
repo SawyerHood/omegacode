@@ -627,7 +627,7 @@ test("H14: agent() rejects invalid provider/sandbox/effort/approval values at sp
   try {
     await assert.rejects(runBody(b, `return await agent("x", { provider: "open-code" })`), /invalid provider "open-code"/)
     await assert.rejects(runBody(b, `return await agent("x", { sandbox: "readonly" })`), /invalid sandbox "readonly"/)
-    await assert.rejects(runBody(b, `return await agent("x", { effort: "ultra" })`), /invalid effort "ultra"/)
+    await assert.rejects(runBody(b, `return await agent("x", { effort: "hyper" })`), /invalid effort "hyper"/)
     await assert.rejects(runBody(b, `return await agent("x", { approval: "always" })`), /invalid approval "always"/)
     // the worker never saw an unvalidated policy
     assert.equal(b.worker.calls.length, 0)

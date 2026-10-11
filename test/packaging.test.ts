@@ -360,7 +360,10 @@ describe("npm pack tarball contract (M31)", () => {
     writeFileSync(join(stage, "secret.env"), "TOKEN=xxx\n")
 
     const out = npm(["pack", "--dry-run", "--json"], stage)
-    entries = JSON.parse(out)[0].files as Array<{ path: string }>
+    // npm ≤11 prints a JSON array; npm 12 prints an object keyed by package name.
+    const parsed: unknown = JSON.parse(out)
+    const first = Array.isArray(parsed) ? parsed[0] : parsed[Object.keys(parsed as Record<string, unknown>)[0]!]
+    entries = (first as { files: Array<{ path: string }> }).files
   })
   after(() => {
     rmSync(stage, { recursive: true, force: true })
@@ -399,7 +402,10 @@ describe("real npm pack tarball (M31, post-build)", () => {
 
   test("built dist packs the dts, ambient, web assets, LICENSE — and nothing unexpected", { skip: !built }, () => {
     const out = npm(["pack", "--dry-run", "--json"], root)
-    const entries = JSON.parse(out)[0].files as Array<{ path: string }>
+    // npm ≤11 prints a JSON array; npm 12 prints an object keyed by package name.
+    const parsed: unknown = JSON.parse(out)
+    const first = Array.isArray(parsed) ? parsed[0] : parsed[Object.keys(parsed as Record<string, unknown>)[0]!]
+    const entries = (first as { files: Array<{ path: string }> }).files
     const paths = entries.map((e) => e.path)
     for (const required of [
       "LICENSE",

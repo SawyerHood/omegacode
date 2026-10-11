@@ -169,6 +169,9 @@ export function toCodexEffort(effort: Effort | undefined): CodexReasoningEffort 
     case "max":
       // codex has no "max"; map to its top supported tier.
       return "xhigh"
+    case "ultra":
+      // Likewise above codex's range (a muse-client-side tier) — top tier, never a failure.
+      return "xhigh"
   }
 }
 

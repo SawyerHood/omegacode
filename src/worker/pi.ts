@@ -43,7 +43,19 @@ const EFFORT_TO_THINKING: Record<Effort, string> = {
   medium: "medium",
   high: "high",
   xhigh: "xhigh",
-  max: "xhigh", // pi has no public "max"; model metadata maps xhigh→max where applicable
+  max: "max",
+  // "ultra" is a muse-client-side tier above every thinking scale — pi's top level.
+  ultra: "max",
+}
+
+/** pi gained a public "max" thinking level in 1.1.0 (verified live: --thinking max accepted
+ *  on the meta backend). Older binaries top out at xhigh, so max maps down there — a safe
+ *  undersell, never a spawn failure. */
+const PI_MAX_VERSION = "1.1.0"
+
+function toPiThinking(effort: Effort, version: string): string {
+  if ((effort === "max" || effort === "ultra") && !versionAtLeast(version, PI_MAX_VERSION)) return "xhigh"
+  return EFFORT_TO_THINKING[effort]
 }
 
 export interface PiWorkerOpts {
@@ -65,7 +77,7 @@ export class PiWorker implements Worker {
   private readonly spawnProcess?: SpawnProcess
   private readonly stallTimeoutMs: number
   /** Once-per-worker version preflight (the factory caches one worker per provider). */
-  private versionCheck: Promise<void> | null = null
+  private versionCheck: Promise<string> | null = null
 
   constructor(opts: PiWorkerOpts = {}) {
     this.bin = opts.bin ?? "pi"
@@ -103,9 +115,9 @@ export class PiWorker implements Worker {
         message: `pi runs as a one-shot subprocess and cannot surface approval requests to omegacode — use approval: "never" with provider "pi"`,
       })
     }
-    await this.ensureVersion()
+    const version = await this.ensureVersion()
 
-    const args = this.baseArgs(spec)
+    const args = this.baseArgs(spec, version)
     const working = await this.runTurn(spec, args, spec.prompt, ctx, true)
     if (!spec.schema) return { text: working.text, status: "completed", usage: working.usage }
 
@@ -145,7 +157,7 @@ export class PiWorker implements Worker {
 
   // -------------------------------------------------------------------------
 
-  private baseArgs(spec: AgentSpec): string[] {
+  private baseArgs(spec: AgentSpec, version: string): string[] {
     return [
       "--mode",
       "json",
@@ -155,12 +167,12 @@ export class PiWorker implements Worker {
       // should use effort, not ":<thinking>" model suffixes — the worker always controls thinking
       // via the flag when effort is set.
       ...(spec.model ? ["--model", spec.model] : []),
-      ...(spec.effort ? ["--thinking", EFFORT_TO_THINKING[spec.effort]] : []),
+      ...(spec.effort ? ["--thinking", toPiThinking(spec.effort, version)] : []),
       ...(spec.instructions ? ["--append-system-prompt", spec.instructions] : []),
     ]
   }
 
-  private ensureVersion(): Promise<void> {
+  private ensureVersion(): Promise<string> {
     if (!this.versionCheck) {
       this.versionCheck = this.checkVersion().catch((err: unknown) => {
         // Do not cache failures — a transient --version hiccup must not poison the worker.
@@ -171,7 +183,7 @@ export class PiWorker implements Worker {
     return this.versionCheck
   }
 
-  private async checkVersion(): Promise<void> {
+  private async checkVersion(): Promise<string> {
     // Isolate the probe: old pi binaries wrote files (agent-dir lock, repo-local .pi) even on
     // --version, so it runs with a scratch agent dir and a neutral cwd regardless of version.
     const scratch = mkdtempSync(join(tmpdir(), "omegacode-pi-version-"))
@@ -198,6 +210,7 @@ export class PiWorker implements Worker {
         retryable: false,
       })
     }
+    return out
   }
 
   /** Run one pi subprocess to completion and map its JSONL AgentEvents. */

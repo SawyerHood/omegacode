@@ -67,6 +67,11 @@ const versionOk: Script = (p) => {
   p.end(0)
 }
 
+const version2x: Script = (p) => {
+  p.stdout.emit("data", "opencode v2.0.26\n")
+  p.end(0)
+}
+
 function harness(scripts: Script[]): { worker: OpencodeWorker; spawned: SpawnCall[] } {
   const spawned: SpawnCall[] = []
   const queue = [...scripts]
@@ -157,6 +162,62 @@ test("model flag is omitted when spec.model is unset (opencode default resolutio
   const h = harness([versionOk, happyRun])
   await h.worker.runAgent(spec(), ctx())
   assert.ok(!h.spawned[1]!.args.includes("--model"))
+})
+
+test("opencode 2.x: effort rides as a #variant suffix on --model (the --variant flag is gone)", async () => {
+  const h = harness([version2x, happyRun])
+  await h.worker.runAgent(spec({ model: "meta/muse-spark-1.3-contributor", effort: "xhigh" }), ctx())
+  assert.deepEqual(h.spawned[1]!.args, [
+    "run",
+    "--format",
+    "json",
+    "--thinking",
+    "--model",
+    "meta/muse-spark-1.3-contributor#xhigh",
+    "--dangerously-skip-permissions",
+  ])
+})
+
+test("ultra maps to the top catalog tier (xhigh) on both opencode generations", async () => {
+  const modern = harness([version2x, happyRun])
+  await modern.worker.runAgent(spec({ model: "meta/muse-spark-1.3-contributor", effort: "ultra" }), ctx())
+  assert.ok(modern.spawned[1]!.args.includes("meta/muse-spark-1.3-contributor#xhigh"))
+  const legacy = harness([versionOk, happyRun])
+  await legacy.worker.runAgent(spec({ model: "meta/muse-spark-1.3-contributor", effort: "ultra" }), ctx())
+  const args = legacy.spawned[1]!.args
+  assert.deepEqual([args[args.indexOf("--variant")], args[args.indexOf("--variant") + 1]], ["--variant", "xhigh"])
+})
+
+test("opencode 1.x: effort still uses the --variant flag", async () => {
+  const h = harness([versionOk, happyRun])
+  await h.worker.runAgent(spec({ model: "meta/muse-spark-1.3-contributor", effort: "xhigh" }), ctx())
+  assert.deepEqual(h.spawned[1]!.args, [
+    "run",
+    "--format",
+    "json",
+    "--thinking",
+    "--variant",
+    "xhigh",
+    "--model",
+    "meta/muse-spark-1.3-contributor",
+    "--dangerously-skip-permissions",
+  ])
+})
+
+test("opencode 2.x: effort without a model fails closed (no silent default-effort run)", async () => {
+  const h = harness([version2x, happyRun])
+  await assert.rejects(
+    h.worker.runAgent(spec({ effort: "xhigh" }), ctx()),
+    /effort without a model is inexpressible on opencode 2\.x/,
+  )
+  assert.equal(h.spawned.length, 1) // version probe only — no agent was ever spawned
+})
+
+test("an explicit #variant in the model is not double-suffixed", async () => {
+  const h = harness([version2x, happyRun])
+  await h.worker.runAgent(spec({ model: "meta/muse-spark-1.3-contributor#xhigh", effort: "xhigh" }), ctx())
+  const modelIdx = h.spawned[1]!.args.indexOf("--model")
+  assert.equal(h.spawned[1]!.args[modelIdx + 1], "meta/muse-spark-1.3-contributor#xhigh")
 })
 
 test("instructions are injected as a delimited stdin preamble (no system-prompt flag exists)", async () => {

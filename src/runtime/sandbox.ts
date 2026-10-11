@@ -208,6 +208,7 @@ export async function runInSandbox(opts: RunInSandboxOptions): Promise<unknown> 
     agent: opts.globals.agent,
     parallel: opts.globals.parallel,
     pipeline: opts.globals.pipeline,
+    workflow: opts.globals.workflow,
     phase: opts.globals.phase,
     log: opts.globals.log,
     now: opts.globals.now,

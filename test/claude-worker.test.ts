@@ -132,6 +132,13 @@ test("spec → SDK options: cwd/model/maxTurns/effort floor/instructions preset 
   assert.equal(o2.systemPrompt, undefined)
 })
 
+test("effort ultra maps to the SDK top (max)", async () => {
+  const calls: QueryCall[] = []
+  const worker = new ClaudeWorker({ queryFn: scripted([resultMsg()], calls) })
+  await worker.runAgent(spec({ effort: "ultra" }), ctx())
+  assert.equal(calls[0]!.options.effort, "max")
+})
+
 test("schema spec: outputFormat is sent and structured_output comes back on the result", async () => {
   const calls: QueryCall[] = []
   const worker = new ClaudeWorker({ queryFn: scripted([resultMsg({ structured_output: { answer: 42 } })], calls) })

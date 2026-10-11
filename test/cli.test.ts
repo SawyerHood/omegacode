@@ -5,7 +5,7 @@
 
 import { strict as assert } from "node:assert"
 import { execFileSync, spawn } from "node:child_process"
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { get as httpGet } from "node:http"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -278,6 +278,73 @@ describe("CLI end-to-end (--fake)", () => {
     const m = await runCli(["run", wf, "--model", "gpt-5.5", "--fake", "--no-serve"], { OMEGACODE_HOME: home })
     assert.equal(m.code, 1)
     assert.match(m.stderr, /model "gpt-5.5" without provider — provider and model must be specified together/)
+  })
+
+  test("OMEGACODE_* env supplies run defaults when flags are absent", async () => {
+    const r = await runCli(["run", wf, "--fake", "--no-serve", "--json"], {
+      OMEGACODE_HOME: home,
+      OMEGACODE_PROVIDER: "opencode",
+      OMEGACODE_MODEL: "openrouter/foo/bar",
+      OMEGACODE_EFFORT: "xhigh",
+      OMEGACODE_SANDBOX: "danger-full-access",
+    })
+    assert.equal(r.code, 0, `stderr=${r.stderr}`)
+    assert.equal(JSON.parse(r.stdout).status, "completed")
+  })
+
+  test("a CLI flag beats its OMEGACODE_* env: lone --provider still rejected with env model set", async () => {
+    // The flag site wins atomically — the env model must not pair with the flag provider.
+    const r = await runCli(["run", wf, "--provider", "codex", "--fake", "--no-serve"], {
+      OMEGACODE_HOME: home,
+      OMEGACODE_PROVIDER: "opencode",
+      OMEGACODE_MODEL: "openrouter/foo/bar",
+    })
+    assert.equal(r.code, 1)
+    assert.match(r.stderr, /provider "codex" without model/)
+  })
+
+  test("invalid OMEGACODE_EFFORT exits 1 with a friendly message, not a stack", async () => {
+    const r = await runCli(["run", wf, "--fake", "--no-serve"], { OMEGACODE_HOME: home, OMEGACODE_EFFORT: "hyper" })
+    assert.equal(r.code, 1)
+    assert.match(r.stderr, /OMEGACODE_EFFORT must be one of/)
+    assert.doesNotMatch(r.stderr, /at \w+ \(/)
+  })
+
+  test("lone OMEGACODE_PROVIDER without OMEGACODE_MODEL is rejected (both-or-neither at the env site)", async () => {
+    const r = await runCli(["run", wf, "--fake", "--no-serve"], { OMEGACODE_HOME: home, OMEGACODE_PROVIDER: "opencode" })
+    assert.equal(r.code, 1)
+    assert.match(r.stderr, /provider "opencode" without model/)
+  })
+
+  test("code defaults (no flags, no OMEGACODE_*): run resolves opencode/muse from DEFAULTS", async () => {
+    // Strip any OMEGACODE_* the parent shell exported — this must pass on bare code defaults.
+    const env = { ...process.env } as Record<string, string | undefined>
+    for (const k of ["OMEGACODE_PROVIDER", "OMEGACODE_MODEL", "OMEGACODE_EFFORT", "OMEGACODE_SANDBOX"]) delete env[k]
+    env.OMEGACODE_HOME = home
+    const r = await runNode(["--import", "tsx", CLI_ENTRY, "run", wf, "--fake", "--no-serve", "--json"], env as Record<string, string>)
+    assert.equal(r.code, 0, `stderr=${r.stderr}`)
+    const out = JSON.parse(r.stdout)
+    assert.equal(out.status, "completed")
+    // Journal started-entries carry the resolved provider; agent meta events carry the model.
+    const journalLines = readFileSync(join(home, "runs", out.runId, "journal.jsonl"), "utf8").trim().split("\n")
+    const started = JSON.parse(journalLines[1]!)
+    assert.equal(started.provider, "opencode")
+    const agentMeta = JSON.parse(readFileSync(join(home, "runs", out.runId, "agents", "1.jsonl"), "utf8").split("\n")[0]!)
+    assert.equal(agentMeta.provider, "opencode")
+    assert.equal(agentMeta.model, "meta/muse-spark-1.3-contributor")
+  })
+
+  test("meta.defaultEffort pins run effort; a typo is rejected at run setup", async () => {
+    const okWf = join(home, "effort-ok.workflow.js")
+    writeFileSync(okWf, `export const meta = { name: "effort-ok", description: "x", defaultEffort: "xhigh" }\nconst a = await agent("say hi")\nreturn a\n`)
+    const ok = await runCli(["run", okWf, "--fake", "--no-serve", "--json"], { OMEGACODE_HOME: home })
+    assert.equal(ok.code, 0, `stderr=${ok.stderr}`)
+    assert.equal(JSON.parse(ok.stdout).status, "completed")
+    const badWf = join(home, "effort-bad.workflow.js")
+    writeFileSync(badWf, `export const meta = { name: "effort-bad", description: "x", defaultEffort: "hyper" }\nconst a = await agent("say hi")\nreturn a\n`)
+    const bad = await runCli(["run", badWf, "--fake", "--no-serve"], { OMEGACODE_HOME: home })
+    assert.equal(bad.code, 1)
+    assert.match(bad.stderr, /invalid effort "hyper"/)
   })
 
   test("doctor resolves bins via env overrides and flags below-minimum versions as OUTDATED", { skip: process.platform === "win32" }, async () => {
